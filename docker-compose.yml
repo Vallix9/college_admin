@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_APP=run.py
+      - FLASK_ENV=development
+      - DATABASE_URL=sqlite:////app/college.db
+      - SECRET_KEY=your-secret-key-change-in-production
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

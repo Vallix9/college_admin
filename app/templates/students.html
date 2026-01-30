@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Студенты{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Студенты</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-people"></i>Студенты
+{% endblock %}
+
+{% block header_actions %}
+<div class="d-flex">
+    <a href="{{ url_for('main.add_student') }}" class="btn btn-primary me-2">
+        <i class="bi bi-person-plus"></i> Добавить студента
+    </a>
+    <button id="exportExcel" class="btn btn-success">
+        <i class="bi bi-file-earmark-excel"></i> Экспорт
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="filter-card">
+    <div class="filter-header">
+        <h5 class="filter-title">Фильтры</h5>
+        <button id="resetFilters" class="btn btn-sm btn-outline-secondary">Сбросить</button>
+    </div>
+    
+    <div class="row g-3">
+        <div class="col-md-3">
+            <label class="form-label">Группа</label>
+            <select id="filterGroup" class="form-select filter-select">
+                <option value="all">Все группы</option>
+                {% for group in groups %}
+                <option value="{{ group.id }}" {% if current_filters.group == group.id|string %}selected{% endif %}>
+                    {{ group.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="col-md-3">
+            <label class="form-label">Пол</label>
+            <select id="filterGender" class="form-select filter-select">
+                <option value="all">Все</option>
+                <option value="M" {% if current_filters.gender == 'M' %}selected{% endif %}>Мужской</option>
+                <option value="F" {% if current_filters.gender == 'F' %}selected{% endif %}>Женский</option>
+            </select>
+        </div>
+        
+        <div class="col-md-3">
+            <label class="form-label">Статус</label>
+            <select id="filterStatus" class="form-select filter-select">
+                <option value="all">Все статусы</option>
+                <option value="active" {% if current_filters.status == 'active' %}selected{% endif %}>Активный</option>
+                <option value="academic_leave" {% if current_filters.status == 'academic_leave' %}selected{% endif %}>Академ</option>
+                <option value="expelled" {% if current_filters.status == 'expelled' %}selected{% endif %}>Отчислен</option>
+                <option value="graduated" {% if current_filters.status == 'graduated' %}selected{% endif %}>Выпускник</option>
+            </select>
+        </div>
+        
+        <div class="col-md-3">
+            <label class="form-label">Поиск</label>
+            <div class="input-group">
+                <input type="text" id="studentSearch" class="form-control" placeholder="ФИО или ID" value="{{ current_filters.search }}">
+                <button class="btn btn-outline-primary" type="button" onclick="updateFilters()">
+                    <i class="bi bi-search"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Список студентов</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>ФИО</th>
+                        <th>Пол</th>
+                        <th>Дата рождения</th>
+                        <th>Группа</th>
+                        <th>Статус</th>
+                        <th>Средний балл</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for student in students.items %}
+                    <tr>
+                        <td><code>{{ student.student_id }}</code></td>
+                        <td>
+                            <strong>{{ student.last_name }} {{ student.first_name }} {{ student.patronymic or '' }}</strong>
+                        </td>
+                        <td>
+                            {% if student.gender == 'M' %}
+                            <span class="badge bg-primary">М</span>
+                            {% else %}
+                            <span class="badge bg-warning">Ж</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if student.birth_date %}
+                            {{ student.birth_date.strftime('%d.%m.%Y') }}
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if student.group %}
+                            <span class="badge bg-secondary">{{ student.group.name }}</span>
+                            {% else %}
+                            <span class="text-muted">Не указана</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if student.status == 'active' %}
+                            <span class="badge bg-success">Активный</span>
+                            {% elif student.status == 'academic_leave' %}
+                            <span class="badge bg-warning">Академ</span>
+                            {% elif student.status == 'expelled' %}
+                            <span class="badge bg-danger">Отчислен</span>
+                            {% elif student.status == 'graduated' %}
+                            <span class="badge bg-info">Выпускник</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ student.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge {% if student.average_grade() >= 4.5 %}bg-success{% elif student.average_grade() >= 3.5 %}bg-primary{% elif student.average_grade() > 0 %}bg-warning{% else %}bg-secondary{% endif %}">
+                                {{ "%.1f"|format(student.average_grade()) if student.average_grade() else '—' }}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm" role="group">
+                                <a href="{{ url_for('main.edit_student', id=student.id) }}" class="btn btn-outline-primary" title="Редактировать">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                <form method="POST" action="{{ url_for('main.delete_student', id=student.id) }}" style="display: inline;">
+                                    <button type="submit" class="btn btn-outline-danger" title="Удалить" onclick="return confirm('Удалить студента {{ student.full_name }}?')">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Пагинация -->
+        {% if students.pages > 1 %}
+        <nav aria-label="Page navigation">
+            <ul class="pagination justify-content-center">
+                {% if students.has_prev %}
+                <li class="page-item">
+                    <a class="page-link" href="{{ url_for('main.students', page=students.prev_num, **current_filters) }}">Назад</a>
+                </li>
+                {% endif %}
+                
+                {% for page_num in students.iter_pages(left_edge=2, right_edge=2, left_current=2, right_current=2) %}
+                    {% if page_num %}
+                        <li class="page-item {% if page_num == students.page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('main.students', page=page_num, **current_filters) }}">{{ page_num }}</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled"><span class="page-link">…</span></li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if students.has_next %}
+                <li class="page-item">
+                    <a class="page-link" href="{{ url_for('main.students', page=students.next_num, **current_filters) }}">Вперед</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        
+        <div class="text-muted text-center mt-3">
+            Показано {{ students.items|length }} из {{ students.total }} студентов
+        </div>
+    </div>
+</div>
+{% endblock %}

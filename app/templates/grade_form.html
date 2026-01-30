@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - {{ title }}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.grades') }}">Успеваемость</a></li>
+<li class="breadcrumb-item active">{{ title }}</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-journal-plus"></i>{{ title }}
+{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('main.grades') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Назад
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Добавление оценки</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                {{ form.student_id.label(class="form-label") }}
+                                {{ form.student_id(class="form-select") }}
+                                {% if form.student_id.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.student_id.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                {{ form.subject_id.label(class="form-label") }}
+                                {{ form.subject_id(class="form-select") }}
+                                {% if form.subject_id.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.subject_id.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                {{ form.grade_value.label(class="form-label") }}
+                                {{ form.grade_value(class="form-select") }}
+                                {% if form.grade_value.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.grade_value.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                {{ form.grade_type.label(class="form-label") }}
+                                {{ form.grade_type(class="form-select") }}
+                                {% if form.grade_type.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.grade_type.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                {{ form.date.label(class="form-label") }}
+                                {{ form.date(class="form-control", type="date") }}
+                                {% if form.date.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.date.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="col-12">
+                            <div class="mb-3">
+                                {{ form.comments.label(class="form-label") }}
+                                {{ form.comments(class="form-control", rows="3", placeholder="Дополнительные комментарии...") }}
+                                {% if form.comments.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.comments.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mt-4">
+                        <a href="{{ url_for('main.grades') }}" class="btn btn-secondary">
+                            <i class="bi bi-x-circle"></i> Отмена
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-circle"></i> Сохранить оценку
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Справочная информация</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Система оценок:</h6>
+                        <ul class="list-unstyled">
+                            <li><span class="badge bg-success me-2">5</span> Отлично</li>
+                            <li><span class="badge bg-primary me-2">4</span> Хорошо</li>
+                            <li><span class="badge bg-warning me-2">3</span> Удовлетворительно</li>
+                            <li><span class="badge bg-danger me-2">2</span> Неудовлетворительно</li>
+                            <li><span class="badge bg-success me-2">Зачет</span> Сдан</li>
+                            <li><span class="badge bg-danger me-2">Незачет</span> Не сдан</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Типы оценок:</h6>
+                        <ul class="list-unstyled">
+                            <li><strong>Экзамен</strong> - итоговая аттестация</li>
+                            <li><strong>Зачет</strong> - промежуточная аттестация</li>
+                            <li><strong>Лабораторная</strong> - практическая работа</li>
+                            <li><strong>Практика</strong> - учебная практика</li>
+                            <li><strong>Тест</strong> - контрольное тестирование</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

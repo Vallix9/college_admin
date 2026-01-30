@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Группы{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Группы</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-collection"></i>Группы
+{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('main.add_group') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle"></i> Добавить группу
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Список учебных групп</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Название</th>
+                                <th>Специальность</th>
+                                <th>Год поступления</th>
+                                <th>Кол-во студентов</th>
+                                <th>Дата создания</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for group in groups %}
+                            <tr>
+                                <td>
+                                    <strong>{{ group.name }}</strong>
+                                </td>
+                                <td>{{ group.specialty or 'Не указана' }}</td>
+                                <td>
+                                    <span class="badge bg-secondary">{{ group.year }}</span>
+                                </td>
+                                <td>
+                                    <span class="badge {% if group.student_count() > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
+                                        {{ group.student_count() }} студентов
+                                    </span>
+                                </td>
+                                <td>
+                                    {{ group.created_at.strftime('%d.%m.%Y') if group.created_at else '—' }}
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <a href="{{ url_for('main.edit_group', id=group.id) }}" class="btn btn-outline-primary" title="Редактировать">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
+                                        <form method="POST" action="{{ url_for('main.delete_group', id=group.id) }}" style="display: inline;">
+                                            <button type="submit" class="btn btn-outline-danger" title="Удалить" onclick="return confirm('Удалить группу {{ group.name }}?')">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">
+                                    <i class="bi bi-inbox display-5 d-block mb-2"></i>
+                                    Нет ни одной группы. <a href="{{ url_for('main.add_group') }}">Создайте первую группу</a>.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Статистика по группам</h5>
+            </div>
+            <div class="card-body">
+                <div class="list-group">
+                    {% for group in groups %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>{{ group.name }}</strong>
+                            <div class="small text-muted">{{ group.specialty or 'Без специальности' }}</div>
+                        </div>
+                        <span class="badge bg-primary rounded-pill">{{ group.student_count() }}</span>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-3">
+                        Нет данных для отображения
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Быстрые действия</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('main.add_group') }}" class="btn btn-primary">
+                        <i class="bi bi-plus-circle"></i> Создать новую группу
+                    </a>
+                    <a href="{{ url_for('main.students') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-people"></i> Перейти к студентам
+                    </a>
+                    <a href="{{ url_for('main.grades') }}" class="btn btn-outline-success">
+                        <i class="bi bi-journal-check"></i> Управление оценками
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
