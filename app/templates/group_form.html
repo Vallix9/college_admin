@@ -2,149 +2,113 @@
 
 {% block title %}College Admin - {{ title }}{% endblock %}
 
-{% block breadcrumb %}
-<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
-<li class="breadcrumb-item"><a href="{{ url_for('main.groups') }}">Группы</a></li>
-<li class="breadcrumb-item active">{{ title }}</li>
-{% endblock %}
-
 {% block page_title %}
-<i class="bi bi-collection"></i>{{ title }}
-{% endblock %}
-
-{% block header_actions %}
-<a href="{{ url_for('main.groups') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-arrow-left"></i> Назад
-</a>
+<i class="bi bi-collection me-2"></i>{{ title }}
 {% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-lg-6 mx-auto">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Данные группы</h5>
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="form-card">
+            <div class="form-header">
+                <h2>
+                    {% if group %}
+                        <i class="bi bi-pencil-square text-warning"></i> Редактирование группы
+                    {% else %}
+                        <i class="bi bi-plus-circle text-success"></i> Создание новой группы
+                    {% endif %}
+                </h2>
+                <p class="text-muted mb-0">
+                    {% if group %}
+                        Измените данные группы и нажмите "Сохранить"
+                    {% else %}
+                        Заполните все поля для создания новой учебной группы
+                    {% endif %}
+                </p>
             </div>
-            <div class="card-body">
-                <form method="POST" action="{{ url_for(group and 'main.edit_group' or 'main.add_group', id=group.id if group else None) }}">
-                    {{ form.hidden_tag() }}
-                    
-                    <div class="mb-3">
-                        {{ form.name.label(class="form-label") }}
-                        {{ form.name(class="form-control", placeholder="Например: ИСП-204") }}
+            
+            <form method="POST" action="" novalidate>
+                {{ form.hidden_tag() }}
+                
+                <div class="row">
+                    <!-- Название группы -->
+                    <div class="col-md-6 mb-3">
+                        <label for="name" class="form-label">
+                            <i class="bi bi-tag me-1"></i> {{ form.name.label.text }}
+                        </label>
+                        {{ form.name(class="form-control", placeholder="Например: ИСП-204, ПКС-101") }}
+                        <div class="form-text">{{ form.name.description }}</div>
                         {% if form.name.errors %}
-                            <div class="text-danger small mt-1">
+                            <div class="text-danger mt-1">
                                 {% for error in form.name.errors %}
-                                    {{ error }}
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                        <div class="form-text">Уникальное название группы, обычно содержит код специальности и номер</div>
-                    </div>
-                    
-                    <div class="mb-3">
-                        {{ form.specialty.label(class="form-label") }}
-                        {{ form.specialty(class="form-control", placeholder="Например: Информационные системы и программирование") }}
-                        {% if form.specialty.errors %}
-                            <div class="text-danger small mt-1">
-                                {% for error in form.specialty.errors %}
-                                    {{ error }}
+                                    <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small><br>
                                 {% endfor %}
                             </div>
                         {% endif %}
                     </div>
                     
-                    <div class="mb-3">
-                        {{ form.year.label(class="form-label") }}
+                    <!-- Год поступления -->
+                    <div class="col-md-6 mb-3">
+                        <label for="year" class="form-label">
+                            <i class="bi bi-calendar me-1"></i> {{ form.year.label.text }}
+                        </label>
                         {{ form.year(class="form-select") }}
+                        <div class="form-text">{{ form.year.description }}</div>
                         {% if form.year.errors %}
-                            <div class="text-danger small mt-1">
+                            <div class="text-danger mt-1">
                                 {% for error in form.year.errors %}
-                                    {{ error }}
+                                    <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small><br>
                                 {% endfor %}
                             </div>
                         {% endif %}
-                        <div class="form-text">Год, когда студенты поступили в эту группу</div>
                     </div>
-                    
-                    <div class="d-flex justify-content-between mt-4">
-                        <a href="{{ url_for('main.groups') }}" class="btn btn-secondary">
-                            <i class="bi bi-x-circle"></i> Отмена
-                        </a>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-check-circle"></i> Сохранить
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-        
-        {% if group and group.students %}
-        <div class="card mt-4">
-            <div class="card-header">
-                <h5 class="mb-0">Студенты в группе ({{ group.students|length }})</h5>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>ФИО</th>
-                                <th>Статус</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for student in group.students[:5] %}
-                            <tr>
-                                <td><small>{{ student.student_id }}</small></td>
-                                <td>{{ student.last_name }} {{ student.first_name[0] }}.</td>
-                                <td>
-                                    {% if student.status == 'active' %}
-                                    <span class="badge bg-success">Активен</span>
-                                    {% else %}
-                                    <span class="badge bg-secondary">{{ student.status }}</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
+                </div>
+                
+                <!-- Специальность -->
+                <div class="mb-4">
+                    <label for="specialty" class="form-label">
+                        <i class="bi bi-book me-1"></i> {{ form.specialty.label.text }}
+                    </label>
+                    {{ form.specialty(class="form-control", placeholder="Например: Информационные системы и программирование") }}
+                    <div class="form-text">{{ form.specialty.description }}</div>
+                    {% if form.specialty.errors %}
+                        <div class="text-danger mt-1">
+                            {% for error in form.specialty.errors %}
+                                <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small><br>
                             {% endfor %}
-                            {% if group.students|length > 5 %}
-                            <tr>
-                                <td colspan="3" class="text-center">
-                                    <small class="text-muted">... и еще {{ group.students|length - 5 }} студентов</small>
-                                </td>
-                            </tr>
-                            {% endif %}
-                        </tbody>
-                    </table>
+                        </div>
+                    {% endif %}
                 </div>
-            </div>
+                
+                <!-- Кнопки действий -->
+                <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+                    <div>
+                        <a href="{{ url_for('main.groups') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left"></i> Назад к списку
+                        </a>
+                    </div>
+                    <div>
+                        {{ form.submit(class="btn btn-primary px-4") }}
+                    </div>
+                </div>
+            </form>
         </div>
-        {% endif %}
         
-        {% if group %}
-        <div class="card mt-4 border-danger">
-            <div class="card-header bg-danger text-white">
-                <h5 class="mb-0">Опасная зона</h5>
+        <!-- Информационная карточка -->
+        <div class="card border-info">
+            <div class="card-header bg-info text-white">
+                <i class="bi bi-info-circle"></i> Полезная информация
             </div>
             <div class="card-body">
-                {% if group.students %}
-                <div class="alert alert-warning">
-                    <i class="bi bi-exclamation-triangle"></i>
-                    <strong>Внимание!</strong> В этой группе есть {{ group.students|length }} студентов. 
-                    Удаление группы невозможно пока в ней есть студенты.
-                </div>
-                {% else %}
-                <p class="text-muted">Удаление группы приведет к безвозвратному удалению данных о группе.</p>
-                <form method="POST" action="{{ url_for('main.delete_group', id=group.id) }}" onsubmit="return confirm('Вы уверены, что хотите удалить группу {{ group.name }}? Это действие нельзя отменить.');">
-                    <button type="submit" class="btn btn-danger">
-                        <i class="bi bi-trash"></i> Удалить группу
-                    </button>
-                </form>
-                {% endif %}
+                <h6 class="card-title">Рекомендации по созданию групп:</h6>
+                <ul class="mb-0">
+                    <li>Используйте понятные названия групп (например, "ИСП-204")</li>
+                    <li>Указывайте полное название специальности</li>
+                    <li>Год поступления должен соответствовать реальному году начала обучения</li>
+                    <li>Каждая группа должна иметь уникальное название</li>
+                </ul>
             </div>
         </div>
-        {% endif %}
     </div>
 </div>
 {% endblock %}

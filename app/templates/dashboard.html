@@ -1,222 +1,155 @@
 {% extends "base.html" %}
 
-{% block title %}College Admin - Дашборд{% endblock %}
-
-{% block breadcrumb %}
-<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
-<li class="breadcrumb-item active">Дашборд</li>
-{% endblock %}
-
 {% block page_title %}
-<i class="bi bi-speedometer2"></i>Дашборд
+<i class="bi bi-speedometer2 me-2"></i>Дашборд
 {% endblock %}
 
 {% block content %}
+<!-- Статистические карточки -->
 <div class="row">
-    <!-- Карточки статистики -->
-    <div class="col-md-3 mb-4">
-        <div class="card stat-card bg-primary">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="card-title">Всего студентов</h5>
-                        <h2 class="display-6">{{ stats.total_students }}</h2>
-                        <small>{{ stats.active_students }} активных</small>
-                    </div>
-                    <i class="bi bi-people stat-icon"></i>
-                </div>
-            </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="stat-card stat-card-1">
+            <i class="bi bi-people"></i>
+            <h3>{{ stats.total_students }}</h3>
+            <p>Всего студентов</p>
         </div>
     </div>
-    
-    <div class="col-md-3 mb-4">
-        <div class="card stat-card bg-success">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="card-title">Группы</h5>
-                        <h2 class="display-6">{{ stats.total_groups }}</h2>
-                        <small>Всего</small>
-                    </div>
-                    <i class="bi bi-collection stat-icon"></i>
-                </div>
-            </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="stat-card stat-card-2">
+            <i class="bi bi-person-check"></i>
+            <h3>{{ stats.active_students }}</h3>
+            <p>Активных студентов</p>
         </div>
     </div>
-    
-    <div class="col-md-3 mb-4">
-        <div class="card stat-card bg-warning">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="card-title">Юноши</h5>
-                        <h2 class="display-6">{{ stats.male_students }}</h2>
-                        <small>{{ (stats.male_students / stats.total_students * 100)|round|int if stats.total_students > 0 else 0 }}%</small>
-                    </div>
-                    <i class="bi bi-gender-male stat-icon"></i>
-                </div>
-            </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="stat-card stat-card-3">
+            <i class="bi bi-collection"></i>
+            <h3>{{ stats.total_groups }}</h3>
+            <p>Групп</p>
         </div>
     </div>
-    
-    <div class="col-md-3 mb-4">
-        <div class="card stat-card bg-info">
+    <div class="col-md-3 col-sm-6">
+        <div class="stat-card stat-card-4">
+            <i class="bi bi-gender-ambiguous"></i>
+            <h3>{{ stats.male_students }}/{{ stats.female_students }}</h3>
+            <p>Юношей/Девушек</p>
+        </div>
+    </div>
+</div>
+
+<!-- Быстрые действия -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Быстрые действия</h5>
+            </div>
             <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="card-title">Девушки</h5>
-                        <h2 class="display-6">{{ stats.female_students }}</h2>
-                        <small>{{ (stats.female_students / stats.total_students * 100)|round|int if stats.total_students > 0 else 0 }}%</small>
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <a href="{{ url_for('main.add_student') }}" class="btn btn-primary w-100 py-3">
+                            <i class="bi bi-person-plus display-6 d-block mb-2"></i>
+                            Добавить студента
+                        </a>
                     </div>
-                    <i class="bi bi-gender-female stat-icon"></i>
+                    <div class="col-md-3 mb-3">
+                        <a href="{{ url_for('main.add_group') }}" class="btn btn-primary w-100 py-3">
+                            <i class="bi bi-plus-circle display-6 d-block mb-2"></i>
+                            Создать группу
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="{{ url_for('main.add_grade') }}" class="btn btn-primary w-100 py-3">
+                            <i class="bi bi-journal-plus display-6 d-block mb-2"></i>
+                            Добавить оценку
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="{{ url_for('main.reports') }}" class="btn btn-primary w-100 py-3">
+                            <i class="bi bi-file-earmark-excel display-6 d-block mb-2"></i>
+                            Создать отчет
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="row">
-    <!-- Быстрые действия -->
-    <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Быстрые действия</h5>
-            </div>
-            <div class="card-body">
-                <div class="row g-3">
-                    <div class="col-md-6">
-                        <a href="{{ url_for('main.add_student') }}" class="btn btn-primary w-100 py-3 d-flex flex-column align-items-center">
-                            <i class="bi bi-person-plus display-6 mb-2"></i>
-                            <span>Добавить студента</span>
-                        </a>
-                    </div>
-                    <div class="col-md-6">
-                        <a href="{{ url_for('main.add_group') }}" class="btn btn-success w-100 py-3 d-flex flex-column align-items-center">
-                            <i class="bi bi-plus-circle display-6 mb-2"></i>
-                            <span>Создать группу</span>
-                        </a>
-                    </div>
-                    <div class="col-md-6">
-                        <a href="{{ url_for('main.add_grade') }}" class="btn btn-warning w-100 py-3 d-flex flex-column align-items-center">
-                            <i class="bi bi-journal-plus display-6 mb-2"></i>
-                            <span>Внести оценку</span>
-                        </a>
-                    </div>
-                    <div class="col-md-6">
-                        <a href="{{ url_for('main.report_students') }}" class="btn btn-info w-100 py-3 d-flex flex-column align-items-center">
-                            <i class="bi bi-file-earmark-excel display-6 mb-2"></i>
-                            <span>Экспорт студентов</span>
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
+<!-- Последние студенты и оценки -->
+<div class="row mt-4">
     <!-- Последние студенты -->
-    <div class="col-md-6 mb-4">
+    <div class="col-md-6">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Последние студенты</h5>
                 <a href="{{ url_for('main.students') }}" class="btn btn-sm btn-outline-primary">Все студенты</a>
             </div>
             <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>ФИО</th>
-                                <th>Группа</th>
-                                <th>Статус</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for student in recent_students %}
-                            <tr>
-                                <td><code>{{ student.student_id }}</code></td>
-                                <td>{{ student.last_name }} {{ student.first_name[0] }}.</td>
-                                <td>
-                                    {% if student.group %}
-                                    <span class="badge bg-primary">{{ student.group.name }}</span>
-                                    {% else %}
-                                    <span class="badge bg-secondary">Не указана</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if student.status == 'active' %}
-                                    <span class="badge bg-success">Активный</span>
-                                    {% elif student.status == 'academic_leave' %}
-                                    <span class="badge bg-warning">Академ</span>
-                                    {% elif student.status == 'expelled' %}
-                                    <span class="badge bg-danger">Отчислен</span>
-                                    {% else %}
-                                    <span class="badge bg-secondary">{{ student.status }}</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                {% if recent_students %}
+                <div class="list-group">
+                    {% for student in recent_students %}
+                    <div class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">{{ student.full_name }}</h6>
+                            <small>{{ student.created_at.strftime('%d.%m.%Y') }}</small>
+                        </div>
+                        <p class="mb-1">
+                            <small class="text-muted">
+                                №: {{ student.student_id }} | 
+                                Группа: {{ student.group.name if student.group else 'Без группы' }}
+                            </small>
+                        </p>
+                    </div>
+                    {% endfor %}
                 </div>
+                {% else %}
+                <p class="text-muted mb-0">Нет данных о студентах</p>
+                {% endif %}
             </div>
         </div>
     </div>
-</div>
-
-<div class="row">
+    
     <!-- Последние оценки -->
-    <div class="col-12">
+    <div class="col-md-6">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Последние оценки</h5>
                 <a href="{{ url_for('main.grades') }}" class="btn btn-sm btn-outline-primary">Все оценки</a>
             </div>
             <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Дата</th>
-                                <th>Студент</th>
-                                <th>Предмет</th>
-                                <th>Оценка</th>
-                                <th>Тип</th>
-                                <th>Комментарий</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for grade in recent_grades %}
-                            <tr>
-                                <td>{{ grade.date.strftime('%d.%m.%Y') }}</td>
-                                <td>{{ grade.student.short_name }}</td>
-                                <td>{{ grade.subject.name[:20] }}{% if grade.subject.name|length > 20 %}...{% endif %}</td>
-                                <td>
-                                    {% if grade.grade_value in ['5', '4', '3', '2'] %}
-                                        {% if grade.grade_value == '5' %}
-                                        <span class="badge bg-success">{{ grade.grade_value }}</span>
-                                        {% elif grade.grade_value == '4' %}
-                                        <span class="badge bg-primary">{{ grade.grade_value }}</span>
-                                        {% elif grade.grade_value == '3' %}
-                                        <span class="badge bg-warning">{{ grade.grade_value }}</span>
-                                        {% else %}
-                                        <span class="badge bg-danger">{{ grade.grade_value }}</span>
-                                        {% endif %}
-                                    {% else %}
-                                        {% if grade.grade_value == 'зачет' %}
-                                        <span class="badge bg-success">Зачет</span>
-                                        {% else %}
-                                        <span class="badge bg-danger">Незачет</span>
-                                        {% endif %}
-                                    {% endif %}
-                                </td>
-                                <td>{{ grade.grade_type or '—' }}</td>
-                                <td>{{ grade.comments or '—' }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                {% if recent_grades %}
+                <div class="list-group">
+                    {% for grade in recent_grades %}
+                    <div class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">
+                                {% if grade.student %}
+                                    {{ grade.student.full_name }}
+                                {% else %}
+                                    Неизвестный студент
+                                {% endif %}
+                            </h6>
+                            <span class="badge {% if grade.grade_value|int >= 4 %}bg-success{% elif grade.grade_value|int == 3 %}bg-warning{% else %}bg-danger{% endif %}">
+                                {{ grade.grade_value }}
+                            </span>
+                        </div>
+                        <p class="mb-1">
+                            <small class="text-muted">
+                                {% if grade.subject %}
+                                    {{ grade.subject.name }}
+                                {% else %}
+                                    Без предмета
+                                {% endif %}
+                                 | {{ grade.date.strftime('%d.%m.%Y') }}
+                            </small>
+                        </p>
+                    </div>
+                    {% endfor %}
                 </div>
+                {% else %}
+                <p class="text-muted mb-0">Нет данных об оценках</p>
+                {% endif %}
             </div>
         </div>
     </div>
