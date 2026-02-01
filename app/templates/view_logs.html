@@ -1,0 +1,481 @@
+{% extends "base.html" %}
+
+{% block title %}Логи системы{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.settings') }}">Настройки</a></li>
+<li class="breadcrumb-item active" aria-current="page">Логи системы</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-journal-text me-2"></i>Логи системы
+{% endblock %}
+
+{% block page_subtitle %}
+Просмотр системных логов и журналов событий
+{% endblock %}
+
+{% block head %}
+<style>
+    .log-entry {
+        font-family: 'Courier New', monospace;
+        font-size: 0.875rem;
+        padding: 8px 12px;
+        border-left: 3px solid transparent;
+        margin-bottom: 2px;
+        border-radius: 4px;
+        background-color: #f8f9fa;
+    }
+    
+    .log-entry:hover {
+        background-color: #e9ecef;
+    }
+    
+    .log-level-info {
+        border-left-color: #0dcaf0;
+    }
+    
+    .log-level-warning {
+        border-left-color: #ffc107;
+    }
+    
+    .log-level-error {
+        border-left-color: #dc3545;
+    }
+    
+    .log-level-critical {
+        border-left-color: #842029;
+        background-color: #f8d7da;
+    }
+    
+    .log-level-debug {
+        border-left-color: #6c757d;
+    }
+    
+    .log-timestamp {
+        color: #6c757d;
+        min-width: 180px;
+    }
+    
+    .log-level {
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        min-width: 70px;
+        text-align: center;
+    }
+    
+    .level-info {
+        background-color: #d1ecf1;
+        color: #0c5460;
+    }
+    
+    .level-warning {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    
+    .level-error {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .level-critical {
+        background-color: #f5c6cb;
+        color: #721c24;
+        font-weight: bold;
+    }
+    
+    .level-debug {
+        background-color: #d6d8d9;
+        color: #1b1e21;
+    }
+    
+    .log-search {
+        position: sticky;
+        top: 0;
+        background-color: white;
+        z-index: 100;
+        padding: 15px 0;
+        border-bottom: 1px solid #dee2e6;
+    }
+    
+    .log-actions {
+        position: sticky;
+        bottom: 0;
+        background-color: white;
+        z-index: 100;
+        padding: 15px 0;
+        border-top: 1px solid #dee2e6;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Системные логи</h5>
+        <div class="btn-group">
+            <button class="btn btn-outline-secondary btn-sm" onclick="refreshLogs()">
+                <i class="bi bi-arrow-clockwise"></i> Обновить
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="clearLogs()">
+                <i class="bi bi-trash"></i> Очистить
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="downloadLogs()">
+                <i class="bi bi-download"></i> Скачать
+            </button>
+        </div>
+    </div>
+    
+    <!-- Поиск и фильтры -->
+    <div class="log-search">
+        <div class="container-fluid">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-search"></i></span>
+                        <input type="text" class="form-control" id="logSearch" placeholder="Поиск в логах..." onkeyup="filterLogs()">
+                        <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex flex-wrap gap-2">
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterInfo" checked onchange="filterLogs()">
+                            <label class="form-check-label" for="filterInfo">
+                                <span class="badge bg-info">INFO</span>
+                            </label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterWarning" checked onchange="filterLogs()">
+                            <label class="form-check-label" for="filterWarning">
+                                <span class="badge bg-warning">WARNING</span>
+                            </label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterError" checked onchange="filterLogs()">
+                            <label class="form-check-label" for="filterError">
+                                <span class="badge bg-danger">ERROR</span>
+                            </label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="filterDebug" onchange="filterLogs()">
+                            <label class="form-check-label" for="filterDebug">
+                                <span class="badge bg-secondary">DEBUG</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Контейнер для логов -->
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0" id="logsTable">
+                <thead>
+                    <tr>
+                        <th width="180">Время</th>
+                        <th width="100">Уровень</th>
+                        <th>Сообщение</th>
+                    </tr>
+                </thead>
+                <tbody id="logsContainer">
+                    {% if logs %}
+                        {% for log in logs|reverse %}
+                        <tr class="log-entry log-level-{{ get_log_level(log)|lower }}">
+                            <td class="log-timestamp">{{ extract_timestamp(log) }}</td>
+                            <td>
+                                <span class="log-level level-{{ get_log_level(log)|lower }}">
+                                    {{ get_log_level(log) }}
+                                </span>
+                            </td>
+                            <td>{{ extract_message(log) }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="3" class="text-center py-5">
+                                <i class="bi bi-journal-x display-4 text-muted mb-3"></i>
+                                <h5 class="text-muted">Логи отсутствуют</h5>
+                                <p class="text-muted">Системные логи пока не созданы</p>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Действия -->
+    <div class="log-actions">
+        <div class="container-fluid">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <small class="text-muted" id="logCount">
+                        {% if logs %}
+                            Показано {{ logs|length }} записей
+                        {% else %}
+                            Нет записей
+                        {% endif %}
+                    </small>
+                </div>
+                <div>
+                    <button class="btn btn-outline-primary btn-sm" onclick="scrollToTop()">
+                        <i class="bi bi-arrow-up"></i> В начало
+                    </button>
+                    <button class="btn btn-outline-primary btn-sm ms-2" onclick="scrollToBottom()">
+                        <i class="bi bi-arrow-down"></i> В конец
+                    </button>
+                    <button class="btn btn-outline-primary btn-sm ms-2" onclick="autoScroll()" id="autoScrollBtn">
+                        <i class="bi bi-play-circle"></i> Автопрокрутка
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Статистика логов -->
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">Статистика логов</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6">
+                        <div class="text-center mb-3">
+                            <div class="display-6 text-info">{{ count_logs_by_level('INFO') }}</div>
+                            <small class="text-muted">INFO</small>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center mb-3">
+                            <div class="display-6 text-warning">{{ count_logs_by_level('WARNING') }}</div>
+                            <small class="text-muted">WARNING</small>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center">
+                            <div class="display-6 text-danger">{{ count_logs_by_level('ERROR') }}</div>
+                            <small class="text-muted">ERROR</small>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center">
+                            <div class="display-6 text-secondary">{{ count_logs_by_level('DEBUG') }}</div>
+                            <small class="text-muted">DEBUG</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">Информация о лог-файле</h6>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled mb-0">
+                    <li class="mb-2 d-flex justify-content-between">
+                        <span>Размер файла:</span>
+                        <span class="fw-medium">{{ get_log_file_size() }} KB</span>
+                    </li>
+                    <li class="mb-2 d-flex justify-content-between">
+                        <span>Последнее изменение:</span>
+                        <span class="fw-medium">{{ get_log_file_mtime() }}</span>
+                    </li>
+                    <li class="mb-2 d-flex justify-content-between">
+                        <span>Всего записей:</span>
+                        <span class="fw-medium">{{ logs|length if logs else 0 }}</span>
+                    </li>
+                    <li class="d-flex justify-content-between">
+                        <span>Период:</span>
+                        <span class="fw-medium">
+                            {% if logs %}
+                                {{ extract_timestamp(logs[-1]) }} - {{ extract_timestamp(logs[0]) }}
+                            {% else %}
+                                Нет данных
+                            {% endif %}
+                        </span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let autoScrollEnabled = false;
+let autoScrollInterval;
+
+function getLogLevel(logText) {
+    if (logText.includes('ERROR') || logText.includes('CRITICAL')) return 'error';
+    if (logText.includes('WARNING')) return 'warning';
+    if (logText.includes('INFO')) return 'info';
+    if (logText.includes('DEBUG')) return 'debug';
+    return 'info';
+}
+
+function extractTimestamp(logText) {
+    // Ищет временную метку в формате "2024-01-15 14:30:25"
+    const timestampMatch = logText.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+    return timestampMatch ? timestampMatch[0] : 'Нет времени';
+}
+
+function extractMessage(logText) {
+    // Удаляем временную метку и уровень для чистого сообщения
+    return logText.replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.*?\[(INFO|WARNING|ERROR|DEBUG|CRITICAL)\]\s*/, '');
+}
+
+function filterLogs() {
+    const searchText = document.getElementById('logSearch').value.toLowerCase();
+    const showInfo = document.getElementById('filterInfo').checked;
+    const showWarning = document.getElementById('filterWarning').checked;
+    const showError = document.getElementById('filterError').checked;
+    const showDebug = document.getElementById('filterDebug').checked;
+    
+    const rows = document.querySelectorAll('#logsContainer tr');
+    let visibleCount = 0;
+    
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const levelClass = Array.from(row.classList).find(cls => cls.startsWith('log-level-'));
+        const level = levelClass ? levelClass.replace('log-level-', '') : 'info';
+        
+        let shouldShow = false;
+        
+        // Проверяем уровень
+        if ((level === 'info' && showInfo) ||
+            (level === 'warning' && showWarning) ||
+            (level === 'error' && showError) ||
+            (level === 'debug' && showDebug)) {
+            shouldShow = true;
+        }
+        
+        // Проверяем поиск
+        if (shouldShow && searchText && !text.includes(searchText)) {
+            shouldShow = false;
+        }
+        
+        row.style.display = shouldShow ? '' : 'none';
+        if (shouldShow) visibleCount++;
+    });
+    
+    document.getElementById('logCount').textContent = `Показано ${visibleCount} записей`;
+}
+
+function clearSearch() {
+    document.getElementById('logSearch').value = '';
+    filterLogs();
+}
+
+function refreshLogs() {
+    location.reload();
+}
+
+function clearLogs() {
+    if (confirm('Вы уверены, что хотите очистить все логи?\nЭто действие нельзя отменить.')) {
+        fetch('/api/system/clear-logs', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Логи очищены');
+                location.reload();
+            } else {
+                alert('Ошибка: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Ошибка сети: ' + error);
+        });
+    }
+}
+
+function downloadLogs() {
+    fetch('/api/system/download-logs')
+        .then(response => response.blob())
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `logs_${new Date().toISOString().slice(0,10)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        })
+        .catch(error => {
+            alert('Ошибка скачивания: ' + error);
+        });
+}
+
+function scrollToTop() {
+    document.querySelector('.card-body').scrollTop = 0;
+}
+
+function scrollToBottom() {
+    const container = document.querySelector('.card-body');
+    container.scrollTop = container.scrollHeight;
+}
+
+function autoScroll() {
+    const btn = document.getElementById('autoScrollBtn');
+    const icon = btn.querySelector('i');
+    
+    if (autoScrollEnabled) {
+        clearInterval(autoScrollInterval);
+        autoScrollEnabled = false;
+        icon.className = 'bi bi-play-circle';
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-outline-primary');
+    } else {
+        autoScrollEnabled = true;
+        icon.className = 'bi bi-pause-circle';
+        btn.classList.remove('btn-outline-primary');
+        btn.classList.add('btn-primary');
+        
+        autoScrollInterval = setInterval(() => {
+            const container = document.querySelector('.card-body');
+            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 10) {
+                // Если уже внизу, обновляем логи
+                refreshLogs();
+            } else {
+                container.scrollTop += 50;
+            }
+        }, 1000);
+    }
+}
+
+// Инициализация
+document.addEventListener('DOMContentLoaded', function() {
+    // Автоматически прокручиваем к новым логам
+    scrollToBottom();
+    
+    // Добавляем обработчики для клавиш
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.key === 'f') {
+            e.preventDefault();
+            document.getElementById('logSearch').focus();
+        }
+    });
+});
+</script>
+{% endblock %}

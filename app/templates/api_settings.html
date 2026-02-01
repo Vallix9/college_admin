@@ -1,0 +1,549 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки API{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.settings') }}">Настройки</a></li>
+<li class="breadcrumb-item active" aria-current="page">API Настройки</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-plug me-2"></i>Настройки API
+{% endblock %}
+
+{% block page_subtitle %}
+Управление API ключами и настройками интеграций
+{% endblock %}
+
+{% block head %}
+<style>
+    .api-key {
+        font-family: 'Courier New', monospace;
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px dashed #dee2e6;
+        word-break: break-all;
+    }
+    
+    .api-endpoint {
+        border-left: 3px solid var(--primary-color);
+        padding-left: 15px;
+        margin-bottom: 20px;
+    }
+    
+    .endpoint-method {
+        font-weight: bold;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        margin-right: 10px;
+    }
+    
+    .method-get { background-color: #d1e7dd; color: #0f5132; }
+    .method-post { background-color: #cfe2ff; color: #084298; }
+    .method-put { background-color: #fff3cd; color: #664d03; }
+    .method-delete { background-color: #f8d7da; color: #842029; }
+    
+    .api-doc {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        padding: 20px;
+    }
+    
+    .copy-btn {
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    
+    .copy-btn:hover {
+        transform: scale(1.1);
+    }
+    
+    .api-usage-chart {
+        height: 200px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8">
+        <!-- API ключ -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">API ключ</h5>
+                <div class="btn-group">
+                    <button class="btn btn-outline-primary btn-sm" onclick="generateApiKey()">
+                        <i class="bi bi-key me-1"></i>Сгенерировать новый ключ
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="revokeApiKey()">
+                        <i class="bi bi-trash me-1"></i>Отозвать ключ
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <strong>API ключ</strong> используется для аутентификации при вызовах API из внешних систем.
+                    Храните его в безопасности и не делитесь публично.
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-medium">Текущий API ключ</label>
+                    <div class="input-group">
+                        <input type="password" 
+                               class="form-control api-key" 
+                               id="apiKeyInput" 
+                               value="{{ session.get('api_key', 'API ключ не сгенерирован') }}"
+                               readonly>
+                        <button class="btn btn-outline-secondary copy-btn" type="button" onclick="copyApiKey()">
+                            <i class="bi bi-clipboard"></i> Копировать
+                        </button>
+                        <button class="btn btn-outline-secondary" type="button" onclick="toggleApiKeyVisibility()">
+                            <i class="bi bi-eye" id="visibilityIcon"></i>
+                        </button>
+                    </div>
+                    <div class="form-text">
+                        <span id="copyStatus" class="text-muted">Нажмите "Копировать" чтобы скопировать ключ в буфер обмена</span>
+                    </div>
+                </div>
+                
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <strong>Внимание!</strong> При генерации нового ключа старый станет недействительным.
+                    Все приложения, использующие старый ключ, потеряют доступ к API.
+                </div>
+            </div>
+        </div>
+        
+        <!-- Документация API -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Документация API</h5>
+            </div>
+            <div class="card-body">
+                <div class="api-doc mb-4">
+                    <h6 class="border-bottom pb-2 mb-3">Основы работы с API</h6>
+                    <p>Все запросы к API должны включать заголовок авторизации:</p>
+                    <div class="alert alert-secondary">
+                        <code>Authorization: Bearer ваш_api_ключ</code>
+                    </div>
+                    
+                    <p>Базовый URL для всех запросов:</p>
+                    <div class="alert alert-secondary">
+                        <code>{{ request.host_url }}api/</code>
+                    </div>
+                </div>
+                
+                <h6 class="mb-3">Доступные endpoint'ы</h6>
+                
+                <!-- Получение студентов -->
+                <div class="api-endpoint">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code>/api/students</code>
+                    </div>
+                    <p class="mb-2">Получение списка студентов с пагинацией</p>
+                    <div class="mb-2">
+                        <small class="text-muted">Параметры:</small>
+                        <ul class="small mb-0">
+                            <li><code>page</code> - номер страницы (по умолчанию: 1)</li>
+                            <li><code>per_page</code> - элементов на странице (по умолчанию: 20)</li>
+                            <li><code>group</code> - фильтр по ID группы</li>
+                            <li><code>gender</code> - фильтр по полу (M/F)</li>
+                        </ul>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="testEndpoint('/api/students')">
+                        <i class="bi bi-play me-1"></i>Тестировать
+                    </button>
+                </div>
+                
+                <!-- Получение оценок -->
+                <div class="api-endpoint">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code>/api/grades</code>
+                    </div>
+                    <p class="mb-2">Получение списка оценок</p>
+                    <div class="mb-2">
+                        <small class="text-muted">Параметры:</small>
+                        <ul class="small mb-0">
+                            <li><code>student_id</code> - фильтр по ID студента</li>
+                            <li><code>subject_id</code> - фильтр по ID предмета</li>
+                            <li><code>date_from</code> - фильтр по дате начала</li>
+                            <li><code>date_to</code> - фильтр по дате окончания</li>
+                        </ul>
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="testEndpoint('/api/grades')">
+                        <i class="bi bi-play me-1"></i>Тестировать
+                    </button>
+                </div>
+                
+                <!-- Статистика -->
+                <div class="api-endpoint">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code>/api/stats</code>
+                    </div>
+                    <p class="mb-2">Получение статистики системы</p>
+                    <p class="small text-muted mb-2">Не требует параметров</p>
+                    <button class="btn btn-sm btn-outline-primary" onclick="testEndpoint('/api/stats')">
+                        <i class="bi bi-play me-1"></i>Тестировать
+                    </button>
+                </div>
+                
+                <!-- Настройки -->
+                <div class="api-endpoint">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code>/api/settings</code>
+                    </div>
+                    <p class="mb-2">Получение текущих настроек системы</p>
+                    <p class="small text-muted mb-2">Не требует параметров</p>
+                    <button class="btn btn-sm btn-outline-primary" onclick="testEndpoint('/api/settings')">
+                        <i class="bi bi-play me-1"></i>Тестировать
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <!-- Статистика использования -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Статистика использования</h5>
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-4">
+                    <div class="display-4 text-primary" id="apiUsageCount">0</div>
+                    <small class="text-muted">Всего вызовов API</small>
+                </div>
+                
+                <div class="mb-3">
+                    <h6>Распределение по методам</h6>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>GET</span>
+                        <span>75%</span>
+                    </div>
+                    <div class="progress mb-3">
+                        <div class="progress-bar bg-success" style="width: 75%"></div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>POST</span>
+                        <span>15%</span>
+                    </div>
+                    <div class="progress mb-3">
+                        <div class="progress-bar bg-info" style="width: 15%"></div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>Другие</span>
+                        <span>10%</span>
+                    </div>
+                    <div class="progress">
+                        <div class="progress-bar bg-warning" style="width: 10%"></div>
+                    </div>
+                </div>
+                
+                <div class="alert alert-secondary">
+                    <i class="bi bi-calendar me-2"></i>
+                    <strong>Период:</strong> Последние 30 дней
+                </div>
+            </div>
+        </div>
+        
+        <!-- Тестирование API -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Тестирование API</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Endpoint</label>
+                    <select class="form-select" id="testEndpointSelect">
+                        <option value="/api/students">/api/students</option>
+                        <option value="/api/grades">/api/grades</option>
+                        <option value="/api/stats">/api/stats</option>
+                        <option value="/api/settings">/api/settings</option>
+                        <option value="/api/system/health">/api/system/health</option>
+                    </select>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Метод</label>
+                    <select class="form-select" id="testMethodSelect">
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="DELETE">DELETE</option>
+                    </select>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Параметры (JSON)</label>
+                    <textarea class="form-control" id="testParams" rows="3" placeholder='{"page": 1, "per_page": 10}'></textarea>
+                </div>
+                
+                <button class="btn btn-primary w-100 mb-3" onclick="runApiTest()">
+                    <i class="bi bi-play-circle me-2"></i>Выполнить тест
+                </button>
+                
+                <div id="testResult" style="display: none;">
+                    <h6>Результат:</h6>
+                    <pre class="bg-light p-3 rounded" id="resultOutput" style="max-height: 200px; overflow: auto;"></pre>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Интеграции -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Интеграции</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="enableWebhooks">
+                        <label class="form-check-label" for="enableWebhooks">Включить Webhooks</label>
+                    </div>
+                    <small class="text-muted">Отправлять уведомления на внешние системы</small>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">URL для Webhooks</label>
+                    <input type="url" class="form-control" id="webhookUrl" placeholder="https://example.com/webhook">
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">События для отправки</label>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="eventNewStudent">
+                        <label class="form-check-label" for="eventNewStudent">Новый студент</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="eventNewGrade">
+                        <label class="form-check-label" for="eventNewGrade">Новая оценка</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="eventStatusChange">
+                        <label class="form-check-label" for="eventStatusChange">Изменение статуса</label>
+                    </div>
+                </div>
+                
+                <button class="btn btn-outline-primary w-100" onclick="saveIntegrationSettings()">
+                    <i class="bi bi-save me-2"></i>Сохранить настройки интеграций
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let apiKeyVisible = false;
+
+function copyApiKey() {
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    apiKeyInput.select();
+    apiKeyInput.setSelectionRange(0, 99999); // Для мобильных устройств
+    
+    navigator.clipboard.writeText(apiKeyInput.value).then(() => {
+        const status = document.getElementById('copyStatus');
+        status.textContent = '✓ Ключ скопирован в буфер обмена';
+        status.className = 'text-success';
+        
+        setTimeout(() => {
+            status.textContent = 'Нажмите "Копировать" чтобы скопировать ключ в буфер обмена';
+            status.className = 'text-muted';
+        }, 3000);
+    });
+}
+
+function toggleApiKeyVisibility() {
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const icon = document.getElementById('visibilityIcon');
+    
+    if (apiKeyVisible) {
+        apiKeyInput.type = 'password';
+        icon.className = 'bi bi-eye';
+    } else {
+        apiKeyInput.type = 'text';
+        icon.className = 'bi bi-eye-slash';
+    }
+    
+    apiKeyVisible = !apiKeyVisible;
+}
+
+function generateApiKey() {
+    if (confirm('Вы уверены, что хотите сгенерировать новый API ключ?\nСтарый ключ станет недействительным.')) {
+        fetch('{{ url_for("main.generate_api_key") }}', {
+            method: 'POST'
+        })
+        .then(response => {
+            if (response.ok) {
+                location.reload();
+            } else {
+                alert('Ошибка генерации ключа');
+            }
+        })
+        .catch(error => {
+            alert('Ошибка сети: ' + error);
+        });
+    }
+}
+
+function revokeApiKey() {
+    if (confirm('Вы уверены, что хотите отозвать API ключ?\nВсе приложения потеряют доступ к API.')) {
+        if (confirm('Это действие нельзя отменить. Продолжить?')) {
+            fetch('/api/system/revoke-api-key', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('API ключ отозван');
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + data.error);
+                }
+            })
+            .catch(error => {
+                alert('Ошибка сети: ' + error);
+            });
+        }
+    }
+}
+
+function testEndpoint(endpoint) {
+    document.getElementById('testEndpointSelect').value = endpoint;
+    document.getElementById('testMethodSelect').value = 'GET';
+    document.getElementById('testParams').value = '';
+    
+    document.getElementById('testEndpointSelect').focus();
+}
+
+function runApiTest() {
+    const endpoint = document.getElementById('testEndpointSelect').value;
+    const method = document.getElementById('testMethodSelect').value;
+    const params = document.getElementById('testParams').value;
+    const apiKey = document.getElementById('apiKeyInput').value;
+    
+    if (!apiKey || apiKey === 'API ключ не сгенерирован') {
+        alert('Сначала сгенерируйте API ключ');
+        return;
+    }
+    
+    let url = endpoint;
+    let options = {
+        method: method,
+        headers: {
+            'Authorization': 'Bearer ' + apiKey,
+            'Content-Type': 'application/json'
+        }
+    };
+    
+    // Для GET запросов добавляем параметры в URL
+    if (method === 'GET' && params) {
+        try {
+            const paramsObj = JSON.parse(params);
+            const urlParams = new URLSearchParams();
+            for (const [key, value] of Object.entries(paramsObj)) {
+                urlParams.append(key, value);
+            }
+            url += '?' + urlParams.toString();
+        } catch (e) {
+            alert('Ошибка в формате параметров: ' + e.message);
+            return;
+        }
+    } else if (params) {
+        // Для других методов добавляем в тело запроса
+        try {
+            options.body = params;
+        } catch (e) {
+            alert('Ошибка в формате параметров: ' + e.message);
+            return;
+        }
+    }
+    
+    fetch(url, options)
+        .then(response => response.json())
+        .then(data => {
+            const resultOutput = document.getElementById('resultOutput');
+            const testResult = document.getElementById('testResult');
+            
+            resultOutput.textContent = JSON.stringify(data, null, 2);
+            testResult.style.display = 'block';
+            resultOutput.scrollIntoView({ behavior: 'smooth' });
+        })
+        .catch(error => {
+            alert('Ошибка запроса: ' + error);
+        });
+}
+
+function saveIntegrationSettings() {
+    const settings = {
+        enableWebhooks: document.getElementById('enableWebhooks').checked,
+        webhookUrl: document.getElementById('webhookUrl').value,
+        events: {
+            newStudent: document.getElementById('eventNewStudent').checked,
+            newGrade: document.getElementById('eventNewGrade').checked,
+            statusChange: document.getElementById('eventStatusChange').checked
+        }
+    };
+    
+    fetch('/api/settings/integrations', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + document.getElementById('apiKeyInput').value
+        },
+        body: JSON.stringify(settings)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Настройки интеграций сохранены');
+        } else {
+            alert('Ошибка: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Ошибка сети: ' + error);
+    });
+}
+
+// Загрузка статистики использования
+function loadApiUsageStats() {
+    fetch('/api/system/api-usage')
+        .then(response => response.json())
+        .then(data => {
+            if (data.total_requests) {
+                document.getElementById('apiUsageCount').textContent = data.total_requests;
+            }
+        });
+}
+
+// Инициализация
+document.addEventListener('DOMContentLoaded', function() {
+    loadApiUsageStats();
+    
+    // Загружаем сохраненные настройки интеграций
+    fetch('/api/settings/integrations')
+        .then(response => response.json())
+        .then(data => {
+            if (data.enableWebhooks !== undefined) {
+                document.getElementById('enableWebhooks').checked = data.enableWebhooks;
+                document.getElementById('webhookUrl').value = data.webhookUrl || '';
+                document.getElementById('eventNewStudent').checked = data.events?.newStudent || false;
+                document.getElementById('eventNewGrade').checked = data.events?.newGrade || false;
+                document.getElementById('eventStatusChange').checked = data.events?.statusChange || false;
+            }
+        });
+});
+</script>
+{% endblock %}

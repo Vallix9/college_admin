@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+
+{% block title %}Управление резервными копиями{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.settings') }}">Настройки</a></li>
+<li class="breadcrumb-item active" aria-current="page">Резервные копии</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-hdd-stack me-2"></i>Управление резервными копиями
+{% endblock %}
+
+{% block page_subtitle %}
+Создание, восстановление и управление резервными копиями данных
+{% endblock %}
+
+{% block head %}
+<style>
+    .backup-card {
+        border-left: 4px solid var(--primary-color);
+        border-radius: 8px;
+        transition: all 0.3s;
+    }
+    
+    .backup-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    .backup-type-badge {
+        font-size: 0.75rem;
+        padding: 3px 8px;
+    }
+    
+    .backup-actions {
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    
+    .backup-card:hover .backup-actions {
+        opacity: 1;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Создать резервную копию</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('main.settings_backup') }}">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="mb-3">
+                        {{ form.backup_type.label(class="form-label") }}
+                        {{ form.backup_type(class="form-select") }}
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="form-check">
+                            {{ form.include_files(class="form-check-input") }}
+                            {{ form.include_files.label(class="form-check-label") }}
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        {{ form.description.label(class="form-label") }}
+                        {{ form.description(class="form-control", placeholder="Необязательное описание резервной копии") }}
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-hdd me-2"></i>Создать резервную копию
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Статистика</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled mb-0">
+                    <li class="mb-2 d-flex justify-content-between">
+                        <span>Всего резервных копий:</span>
+                        <span class="fw-medium">{{ backups|length }}</span>
+                    </li>
+                    <li class="mb-2 d-flex justify-content-between">
+                        <span>Общий размер:</span>
+                        <span class="fw-medium">
+                            {% if backups %}
+                                {{ (backups|sum(attribute='size') / 1024 / 1024)|round(2) }} MB
+                            {% else %}
+                                0 MB
+                            {% endif %}
+                        </span>
+                    </li>
+                    <li class="mb-2 d-flex justify-content-between">
+                        <span>Последняя копия:</span>
+                        <span class="fw-medium">
+                            {% if backups %}
+                                {{ backups[0].date|default('Нет данных') }}
+                            {% else %}
+                                Нет данных
+                            {% endif %}
+                        </span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Существующие резервные копии</h5>
+                <small class="text-muted">Отсортировано по дате (новые сверху)</small>
+            </div>
+            <div class="card-body">
+                {% if backups %}
+                    <div class="list-group">
+                        {% for backup in backups %}
+                        <div class="list-group-item list-group-item-action backup-card mb-3">
+                            <div class="d-flex w-100 justify-content-between align-items-start">
+                                <div class="flex-grow-1">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <h6 class="mb-0">
+                                            <i class="bi bi-file-earmark-zip text-primary me-2"></i>
+                                            {{ backup.filename }}
+                                        </h6>
+                                        <span class="badge backup-type-badge 
+                                            {% if backup.type == 'full' %}bg-primary
+                                            {% elif backup.type == 'students' %}bg-success
+                                            {% elif backup.type == 'grades' %}bg-warning
+                                            {% else %}bg-info{% endif %}">
+                                            {{ backup.type|upper }}
+                                        </span>
+                                    </div>
+                                    
+                                    <div class="mb-2">
+                                        <small class="text-muted">
+                                            <i class="bi bi-calendar me-1"></i>
+                                            Создано: {{ backup.date }}
+                                        </small>
+                                    </div>
+                                    
+                                    {% if backup.description %}
+                                    <p class="mb-2 small">{{ backup.description }}</p>
+                                    {% endif %}
+                                    
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <small class="text-muted">
+                                                <i class="bi bi-hdd me-1"></i>
+                                                Размер: {{ backup.size_mb }} MB
+                                            </small>
+                                        </div>
+                                        
+                                        <div class="backup-actions">
+                                            <div class="btn-group btn-group-sm">
+                                                <button type="button" class="btn btn-outline-primary" 
+                                                        data-bs-toggle="modal" 
+                                                        data-bs-target="#restoreModal{{ loop.index }}">
+                                                    <i class="bi bi-arrow-clockwise"></i> Восстановить
+                                                </button>
+                                                <a href="{{ url_for('static', filename='backups/' + backup.filename) }}" 
+                                                   class="btn btn-outline-success" 
+                                                   download>
+                                                    <i class="bi bi-download"></i> Скачать
+                                                </a>
+                                                <button type="button" class="btn btn-outline-danger" 
+                                                        data-bs-toggle="modal" 
+                                                        data-bs-target="#deleteModal{{ loop.index }}">
+                                                    <i class="bi bi-trash"></i> Удалить
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Модальное окно восстановления -->
+                        <div class="modal fade" id="restoreModal{{ loop.index }}" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title">Восстановление из резервной копии</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <div class="alert alert-warning">
+                                            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                                            <strong>Внимание!</strong> Вы собираетесь восстановить данные из резервной копии.
+                                        </div>
+                                        <p>Это действие:</p>
+                                        <ul>
+                                            <li>Заменит текущие данные данными из резервной копии</li>
+                                            <li>Может привести к потере новых данных</li>
+                                            <li>Будет автоматически создана резервная копия перед восстановлением</li>
+                                        </ul>
+                                        <p class="fw-medium">Вы уверены, что хотите продолжить?</p>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                        <form method="POST" action="{{ url_for('main.restore_backup_file', filename=backup.filename) }}">
+                                            <button type="submit" class="btn btn-warning">
+                                                <i class="bi bi-arrow-clockwise me-2"></i>Восстановить
+                                            </button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Модальное окно удаления -->
+                        <div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title">Удаление резервной копии</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p>Вы уверены, что хотите удалить резервную копию <strong>{{ backup.filename }}</strong>?</p>
+                                        <p class="text-danger">Это действие нельзя отменить.</p>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                        <form method="POST" action="{{ url_for('main.delete_backup_file', filename=backup.filename) }}">
+                                            <button type="submit" class="btn btn-danger">
+                                                <i class="bi bi-trash me-2"></i>Удалить
+                                            </button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-5">
+                        <i class="bi bi-hdd display-1 text-muted mb-3"></i>
+                        <h5 class="text-muted">Резервные копии отсутствуют</h5>
+                        <p class="text-muted">Создайте первую резервную копию для защиты данных</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Автоматическое резервное копирование</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <strong>Информация:</strong> Автоматическое резервное копирование настроено в разделе 
+                    <a href="{{ url_for('main.settings') }}#backup-settings" class="alert-link">Основных настроек</a>.
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card bg-light">
+                            <div class="card-body">
+                                <h6 class="card-title">Рекомендации</h6>
+                                <ul class="small mb-0">
+                                    <li>Создавайте полные резервные копии еженедельно</li>
+                                    <li>Храните копии в разных местах</li>
+                                    <li>Проверяйте целостность резервных копий</li>
+                                    <li>Шифруйте конфиденциальные данные</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card bg-light">
+                            <div class="card-body">
+                                <h6 class="card-title">Советы по безопасности</h6>
+                                <ul class="small mb-0">
+                                    <li>Не храните пароли в резервных копиях</li>
+                                    <li>Ограничьте доступ к файлам резервных копий</li>
+                                    <li>Используйте сложные пароли для архивов</li>
+                                    <li>Регулярно обновляйте процедуры резервного копирования</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Подтверждение действий
+    document.querySelectorAll('.confirm-action').forEach(button => {
+        button.addEventListener('click', function(e) {
+            if (!confirm(this.dataset.confirmMessage || 'Вы уверены?')) {
+                e.preventDefault();
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

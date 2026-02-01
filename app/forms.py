@@ -1,11 +1,15 @@
-from datetime import datetime
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, SubmitField, SelectField, DateField, TextAreaField, IntegerField
-from wtforms.validators import DataRequired, Email, Length, Optional, ValidationError, NumberRange
-from app.models import Group, Student, Subject
+from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField
+from wtforms.validators import DataRequired, Length, EqualTo, Optional, Email, ValidationError, NumberRange
+from wtforms.widgets import ListWidget, CheckboxInput
+from app.models import User
+
+class MultiCheckboxField(SelectMultipleField):
+    widget = ListWidget(prefix_label=False)
+    option_widget = CheckboxInput()
 
 class LoginForm(FlaskForm):
-    username = StringField('Логин', validators=[DataRequired()])
+    username = StringField('Имя пользователя', validators=[DataRequired()])
     password = PasswordField('Пароль', validators=[DataRequired()])
     remember_me = BooleanField('Запомнить меня')
     submit = SubmitField('Войти')
@@ -15,149 +19,139 @@ class StudentForm(FlaskForm):
     last_name = StringField('Фамилия*', validators=[DataRequired(), Length(max=50)])
     first_name = StringField('Имя*', validators=[DataRequired(), Length(max=50)])
     patronymic = StringField('Отчество', validators=[Optional(), Length(max=50)])
-    gender = SelectField('Пол*', choices=[
-        ('M', '👨 Мужской'),
-        ('F', '👩 Женский')
-    ], validators=[DataRequired()])
+    gender = SelectField('Пол*', choices=[('M', 'Мужской'), ('F', 'Женский')], validators=[DataRequired()])
     birth_date = DateField('Дата рождения', format='%Y-%m-%d', validators=[Optional()])
     email = StringField('Email', validators=[Optional(), Email(), Length(max=100)])
     phone = StringField('Телефон', validators=[Optional(), Length(max=20)])
-    group_id = SelectField('Группа*', coerce=int, validators=[DataRequired()])
-    status = SelectField('Статус*', choices=[
-        ('active', '✅ Активный'),
-        ('academic_leave', '⏸️ Академический отпуск'),
-        ('expelled', '❌ Отчислен'),
-        ('graduated', '🎓 Выпускник')
-    ], validators=[DataRequired()])
-    enrollment_date = DateField('Дата поступления', format='%Y-%m-%d', default=datetime.now, validators=[Optional()])
+    group_id = SelectField('Группа', coerce=int, validators=[Optional()])
+    status = SelectField('Статус', choices=[
+        ('active', 'Активен'),
+        ('academic_leave', 'Академический отпуск'),
+        ('expelled', 'Отчислен'),
+        ('graduated', 'Выпускник')
+    ], default='active')
+    enrollment_date = DateField('Дата поступления', format='%Y-%m-%d', validators=[Optional()])
     submit = SubmitField('Сохранить')
-    
-    def __init__(self, *args, **kwargs):
-        super(StudentForm, self).__init__(*args, **kwargs)
-        # Динамическое заполнение списка групп
-        self.group_id.choices = [(-1, '-- Выберите группу --')] + [(g.id, f"{g.name} ({g.specialty[:30]}...)") for g in Group.query.order_by(Group.name).all()]
-        
-        # Установим текущую дату по умолчанию, если не задана
-        if not self.enrollment_date.data:
-            self.enrollment_date.data = datetime.now().date()
-    
-    def validate_student_id(self, field):
-        """Проверка уникальности номера зачетки"""
-        student = Student.query.filter_by(student_id=field.data).first()
-        # Если редактируем существующего студента, пропускаем проверку для него самого
-        if hasattr(self, 'obj') and self.obj:
-            if student and student.id != self.obj.id:
-                raise ValidationError('Студент с таким номером зачетки уже существует.')
-        else:
-            # При создании нового студента
-            if student:
-                raise ValidationError('Студент с таким номером зачетки уже существует.')
 
 class GroupForm(FlaskForm):
-    name = StringField('Название группы*', 
-                      validators=[DataRequired(), Length(max=50)],
-                      description="Например: ИСП-204, ПКС-101")
-    specialty = StringField('Специальность*', 
-                           validators=[DataRequired(), Length(max=200)],
-                           description="Полное название специальности")
-    year = SelectField('Год поступления*', 
-                      coerce=int, 
-                      validators=[DataRequired()],
-                      description="Год, когда группа начала обучение")
-    submit = SubmitField('✅ Сохранить')
-    
-    def __init__(self, *args, **kwargs):
-        super(GroupForm, self).__init__(*args, **kwargs)
-        current_year = datetime.now().year
-        
-        # Динамический список годов: от 2018 до текущего + 5 лет
-        # Например, если сейчас 2026, то будут года: 2018-2031
-        start_year = 2018
-        end_year = current_year + 6  # +6 чтобы включить текущий год и 5 лет вперед
-        
-        # Создаем список годов в обратном порядке (новые сверху)
-        years = list(range(start_year, end_year))
-        years.reverse()  # От новых к старым
-        
-        self.year.choices = [(y, str(y)) for y in years]
-        
-        # Установим текущий год как значение по умолчанию
-        if not self.year.data:
-            self.year.data = current_year
-    
-    def validate_name(self, field):
-        """Проверка уникальности имени группы"""
-        group = Group.query.filter_by(name=field.data).first()
-        
-        # Если редактируем существующую группу
-        if hasattr(self, 'obj') and self.obj:
-            # Пропускаем проверку для текущей группы
-            if group and group.id != self.obj.id:
-                raise ValidationError('❌ Группа с таким названием уже существует!')
-        else:
-            # При создании новой группы
-            if group:
-                raise ValidationError('❌ Группа с таким названием уже существует!')
+    name = StringField('Название группы*', validators=[DataRequired(), Length(max=50)])
+    specialty = StringField('Специальность*', validators=[DataRequired(), Length(max=200)])
+    year = IntegerField('Год поступления*', validators=[DataRequired(), NumberRange(min=2000, max=2100)])
+    submit = SubmitField('Сохранить')
 
 class GradeForm(FlaskForm):
     student_id = SelectField('Студент*', coerce=int, validators=[DataRequired()])
     subject_id = SelectField('Предмет*', coerce=int, validators=[DataRequired()])
-    grade_value = SelectField('Оценка*', choices=[
-        ('5', '5️⃣ - Отлично'),
-        ('4', '4️⃣ - Хорошо'),
-        ('3', '3️⃣ - Удовлетворительно'),
-        ('2', '2️⃣ - Неудовлетворительно'),
-        ('зачет', '✅ Зачет'),
-        ('незачет', '❌ Незачет'),
-        ('н/я', '📝 Не явился')
-    ], validators=[DataRequired()])
+    grade_value = IntegerField('Оценка*', validators=[DataRequired(), NumberRange(min=1, max=5)])
     grade_type = SelectField('Тип оценки', choices=[
-        ('экзамен', '📚 Экзамен'),
-        ('зачет', '📋 Зачет'),
-        ('лабораторная', '🔬 Лабораторная работа'),
-        ('практика', '🛠️ Практическая работа'),
-        ('тест', '📝 Тест'),
-        ('курсовая', '📄 Курсовая работа'),
-        ('диплом', '🎓 Дипломная работа')
-    ], default='экзамен', validators=[Optional()])
-    date = DateField('Дата оценки*', format='%Y-%m-%d', default=datetime.now, validators=[DataRequired()])
-    comments = TextAreaField('Комментарии', 
-                           validators=[Optional(), Length(max=500)],
-                           description="Дополнительные заметки по оценке",
-                           render_kw={"rows": 3})
-    submit = SubmitField('✅ Сохранить оценку')
-    
-    def __init__(self, *args, **kwargs):
-        super(GradeForm, self).__init__(*args, **kwargs)
-        # Динамическое заполнение списка студентов
-        self.student_id.choices = [(-1, '-- Выберите студента --')] + [
-            (s.id, f"{s.last_name} {s.first_name[0]}. {s.patronymic[0] if s.patronymic else ''}. ({s.student_id})") 
-            for s in Student.query.order_by(Student.last_name, Student.first_name).all()
-        ]
-        
-        # Динамическое заполнение списка предметов
-        self.subject_id.choices = [(-1, '-- Выберите предмет --')] + [
-            (s.id, f"{s.name}") 
-            for s in Subject.query.order_by(Subject.name).all()
-        ]
+        ('lecture', 'Лекция'),
+        ('practice', 'Практика'),
+        ('exam', 'Экзамен'),
+        ('test', 'Зачет'),
+        ('homework', 'Домашняя работа'),
+        ('lab', 'Лабораторная работа')
+    ], default='lecture')
+    date = DateField('Дата*', format='%Y-%m-%d', validators=[DataRequired()])
+    comments = TextAreaField('Комментарий', validators=[Optional(), Length(max=500)])
+    submit = SubmitField('Сохранить')
 
 class SubjectForm(FlaskForm):
-    name = StringField('Название предмета*', 
-                      validators=[DataRequired(), Length(max=100)],
-                      description="Например: Программирование на Python")
-    hours = IntegerField('Количество часов*', 
-                        validators=[DataRequired(), NumberRange(min=1, max=500)],
-                        default=72,
-                        description="Общее количество учебных часов")
-    submit = SubmitField('✅ Сохранить')
+    name = StringField('Название предмета*', validators=[DataRequired(), Length(max=100)])
+    hours = IntegerField('Количество часов', default=72, validators=[Optional(), NumberRange(min=1)])
+    submit = SubmitField('Сохранить')
+
+class SettingsForm(FlaskForm):
+    """Форма настроек системы"""
     
-    def validate_name(self, field):
-        """Проверка уникальности названия предмета"""
-        subject = Subject.query.filter_by(name=field.data).first()
-        
-        if hasattr(self, 'obj') and self.obj:
-            if subject and subject.id != self.obj.id:
-                raise ValidationError('Предмет с таким названием уже существует!')
-        else:
-            if subject:
-                raise ValidationError('Предмет с таким названием уже существует!')
+    # Основные настройки
+    college_name = StringField('Название колледжа*', 
+                              validators=[DataRequired(), Length(max=200)])
+    academic_year = StringField('Учебный год*', 
+                               validators=[DataRequired(), Length(max=50)])
+    max_students_per_group = IntegerField('Максимум студентов в группе*', 
+                                         validators=[DataRequired(), NumberRange(min=1, max=100)])
+    
+    # Настройки отображения
+    theme_color = SelectField('Цветовая тема', 
+                             choices=[
+                                 ('purple', 'Фиолетовая'),
+                                 ('blue', 'Синяя'),
+                                 ('green', 'Зеленая'),
+                                 ('red', 'Красная'),
+                                 ('dark', 'Темная')
+                             ])
+    items_per_page = IntegerField('Элементов на странице', 
+                                 validators=[DataRequired(), NumberRange(min=5, max=100)])
+    
+    # Настройки экспорта
+    export_format = SelectField('Формат экспорта по умолчанию', 
+                               choices=[
+                                   ('excel', 'Excel (.xlsx)'),
+                                   ('csv', 'CSV'),
+                                   ('pdf', 'PDF')
+                               ])
+    
+    # Настройки уведомлений
+    enable_system_notifications = BooleanField('Системные уведомления')
+    enable_email_notifications = BooleanField('Email уведомления')
+    
+    # Настройки резервного копирования
+    auto_backup = BooleanField('Автоматическое резервное копирование')
+    backup_frequency = SelectField('Частота резервного копирования', 
+                                  choices=[
+                                      ('daily', 'Ежедневно'),
+                                      ('weekly', 'Еженедельно'),
+                                      ('monthly', 'Ежемесячно')
+                                  ])
+    
+    # Смена пароля (опционально)
+    current_password = PasswordField('Текущий пароль', validators=[Optional()])
+    new_password = PasswordField('Новый пароль', validators=[Optional(), Length(min=6, max=100)])
+    confirm_password = PasswordField('Подтвердите пароль', 
+                                     validators=[EqualTo('new_password', message='Пароли должны совпадать')])
+    
+    # Дополнительные настройки
+    show_welcome_message = BooleanField('Показывать приветственное сообщение')
+    enable_export_logging = BooleanField('Вести журнал экспорта')
+    enable_grade_alerts = BooleanField('Оповещения о новых оценках')
+    
+    submit = SubmitField('Сохранить настройки')
+    reset = SubmitField('Сбросить к значениям по умолчанию')
+    
+    def validate_current_password(self, field):
+        """Валидация текущего пароля только если указан новый"""
+        from flask_login import current_user
+        if self.new_password.data and not current_user.check_password(field.data):
+            raise ValidationError('Текущий пароль указан неверно')
+
+class BackupForm(FlaskForm):
+    """Форма для ручного резервного копирования"""
+    backup_type = SelectField('Тип резервной копии', 
+                             choices=[
+                                 ('full', 'Полная резервная копия'),
+                                 ('students', 'Только студенты'),
+                                 ('grades', 'Только оценки'),
+                                 ('settings', 'Только настройки')
+                             ])
+    include_files = BooleanField('Включать загруженные файлы')
+    description = StringField('Описание (необязательно)', 
+                             validators=[Optional(), Length(max=200)])
+    submit = SubmitField('Создать резервную копию')
+
+class ImportForm(FlaskForm):
+    """Форма для импорта данных"""
+    import_type = SelectField('Тип импорта', 
+                             choices=[
+                                 ('students', 'Студенты'),
+                                 ('grades', 'Оценки'),
+                                 ('groups', 'Группы'),
+                                 ('settings', 'Настройки')
+                             ])
+    file = FileField('Файл для импорта', 
+                    validators=[DataRequired()])
+    import_mode = SelectField('Режим импорта', 
+                             choices=[
+                                 ('append', 'Добавить к существующим'),
+                                 ('replace', 'Заменить существующие')
+                             ])
+    submit = SubmitField('Импортировать данные')

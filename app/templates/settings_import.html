@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block title %}Импорт данных{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.settings') }}">Настройки</a></li>
+<li class="breadcrumb-item active" aria-current="page">Импорт данных</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-upload me-2"></i>Импорт данных
+{% endblock %}
+
+{% block page_subtitle %}
+Загрузка данных из внешних источников и файлов
+{% endblock %}
+
+{% block head %}
+<style>
+    .import-step {
+        display: flex;
+        align-items: center;
+        margin-bottom: 30px;
+    }
+    
+    .step-number {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background-color: var(--primary-color);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        margin-right: 15px;
+    }
+    
+    .step-content {
+        flex: 1;
+    }
+    
+    .template-card {
+        border: 2px dashed #dee2e6;
+        border-radius: 10px;
+        padding: 20px;
+        text-align: center;
+        transition: all 0.3s;
+        cursor: pointer;
+    }
+    
+    .template-card:hover {
+        border-color: var(--primary-color);
+        background-color: rgba(111, 66, 193, 0.05);
+    }
+    
+    .file-upload-area {
+        border: 2px dashed #dee2e6;
+        border-radius: 10px;
+        padding: 40px 20px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    
+    .file-upload-area:hover {
+        border-color: var(--primary-color);
+        background-color: rgba(111, 66, 193, 0.05);
+    }
+    
+    .file-upload-area.dragover {
+        border-color: var(--primary-color);
+        background-color: rgba(111, 66, 193, 0.1);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <!-- Шаги импорта -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Процесс импорта данных</h5>
+            </div>
+            <div class="card-body">
+                <!-- Шаг 1 -->
+                <div class="import-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h6>Скачайте шаблон</h6>
+                        <p>Выберите тип данных и скачайте соответствующий шаблон файла</p>
+                        
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <div class="template-card" onclick="downloadTemplate('students')">
+                                    <i class="bi bi-people display-4 text-primary mb-3"></i>
+                                    <h6>Студенты</h6>
+                                    <small class="text-muted">Шаблон для импорта студентов</small>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <div class="template-card" onclick="downloadTemplate('grades')">
+                                    <i class="bi bi-journal-check display-4 text-primary mb-3"></i>
+                                    <h6>Оценки</h6>
+                                    <small class="text-muted">Шаблон для импорта оценок</small>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <div class="template-card" onclick="downloadTemplate('groups')">
+                                    <i class="bi bi-collection display-4 text-primary mb-3"></i>
+                                    <h6>Группы</h6>
+                                    <small class="text-muted">Шаблон для импорта групп</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Шаг 2 -->
+                <div class="import-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h6>Заполните данные</h6>
+                        <p>Заполните скачанный шаблон вашими данными, следуя инструкциям в файле</p>
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <strong>Важно:</strong> Не изменяйте названия столбцов в первой строке файла
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Шаг 3 -->
+                <div class="import-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h6>Загрузите файл</h6>
+                        <p>Выберите заполненный файл для импорта</p>
+                        
+                        <form method="POST" action="{{ url_for('main.settings_import') }}" enctype="multipart/form-data" id="importForm">
+                            {{ form.hidden_tag() }}
+                            
+                            <div class="file-upload-area mb-3" id="dropArea">
+                                <i class="bi bi-cloud-arrow-up display-4 text-muted mb-3"></i>
+                                <h5>Перетащите файл сюда или нажмите для выбора</h5>
+                                <p class="text-muted">Поддерживаемые форматы: .xlsx, .xls, .csv</p>
+                                <input type="file" name="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+                                <div id="fileName" class="mt-2"></div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    {{ form.import_type.label(class="form-label") }}
+                                    {{ form.import_type(class="form-select") }}
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    {{ form.import_mode.label(class="form-label") }}
+                                    {{ form.import_mode(class="form-select") }}
+                                </div>
+                            </div>
+                            
+                            <div class="alert alert-warning" id="validationMessage" style="display: none;"></div>
+                            
+                            <button type="submit" class="btn btn-primary w-100" id="submitBtn" disabled>
+                                <i class="bi bi-upload me-2"></i>Начать импорт
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- История импорта -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">История импорта</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>Тип</th>
+                                <th>Файл</th>
+                                <th>Результат</th>
+                                <th>Статус</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="5" class="text-center text-muted py-4">
+                                    <i class="bi bi-clock-history display-4 mb-3"></i>
+                                    <p>История импорта отсутствует</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function downloadTemplate(type) {
+    window.location.href = `/settings/export-template/${type}`;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const dropArea = document.getElementById('dropArea');
+    const fileInput = document.getElementById('fileInput');
+    const fileName = document.getElementById('fileName');
+    const submitBtn = document.getElementById('submitBtn');
+    const validationMessage = document.getElementById('validationMessage');
+    const importType = document.getElementById('import_type');
+    
+    // Обработка клика по области загрузки
+    dropArea.addEventListener('click', () => fileInput.click());
+    
+    // Обработка изменения файла
+    fileInput.addEventListener('change', function() {
+        if (this.files.length > 0) {
+            const file = this.files[0];
+            validateFile(file);
+        }
+    });
+    
+    // Обработка перетаскивания
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropArea.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropArea.addEventListener(eventName, highlight, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropArea.addEventListener(eventName, unhighlight, false);
+    });
+    
+    function highlight() {
+        dropArea.classList.add('dragover');
+    }
+    
+    function unhighlight() {
+        dropArea.classList.remove('dragover');
+    }
+    
+    // Обработка сброса файла
+    dropArea.addEventListener('drop', function(e) {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        
+        if (files.length > 0) {
+            fileInput.files = files;
+            validateFile(files[0]);
+        }
+    });
+    
+    // Валидация файла
+    function validateFile(file) {
+        const validExtensions = ['.xlsx', '.xls', '.csv'];
+        const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+        
+        fileName.innerHTML = `
+            <div class="alert alert-success">
+                <i class="bi bi-check-circle me-2"></i>
+                Выбран файл: <strong>${file.name}</strong>
+                <br><small>Размер: ${(file.size / 1024).toFixed(2)} KB</small>
+            </div>
+        `;
+        
+        if (!validExtensions.includes(fileExtension)) {
+            validationMessage.innerHTML = `
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                Неподдерживаемый формат файла. Разрешены: ${validExtensions.join(', ')}
+            `;
+            validationMessage.className = 'alert alert-danger';
+            validationMessage.style.display = 'block';
+            submitBtn.disabled = true;
+            return;
+        }
+        
+        if (file.size > 10 * 1024 * 1024) { // 10MB
+            validationMessage.innerHTML = `
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                Файл слишком большой. Максимальный размер: 10MB
+            `;
+            validationMessage.className = 'alert alert-danger';
+            validationMessage.style.display = 'block';
+            submitBtn.disabled = true;
+            return;
+        }
+        
+        validationMessage.style.display = 'none';
+        submitBtn.disabled = false;
+    }
+    
+    // Предупреждение о режиме замены
+    importType.addEventListener('change', function() {
+        const importMode = document.getElementById('import_mode');
+        if (importMode.value === 'replace') {
+            validationMessage.innerHTML = `
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <strong>Внимание!</strong> Режим "Заменить существующие" удалит все текущие данные выбранного типа
+            `;
+            validationMessage.className = 'alert alert-warning';
+            validationMessage.style.display = 'block';
+        }
+    });
+    
+    document.getElementById('import_mode').addEventListener('change', function() {
+        if (this.value === 'replace') {
+            validationMessage.innerHTML = `
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <strong>Внимание!</strong> Режим "Заменить существующие" удалит все текущие данные выбранного типа
+            `;
+            validationMessage.className = 'alert alert-warning';
+            validationMessage.style.display = 'block';
+        } else {
+            validationMessage.style.display = 'none';
+        }
+    });
+    
+    // Подтверждение импорта
+    document.getElementById('importForm').addEventListener('submit', function(e) {
+        const importMode = document.getElementById('import_mode').value;
+        const importType = document.getElementById('import_type').value;
+        
+        if (importMode === 'replace') {
+            if (!confirm(`Вы уверены, что хотите удалить все текущие данные "${importType}" и заменить их новыми?`)) {
+                e.preventDefault();
+                return false;
+            }
+        }
+        
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Импорт выполняется...';
+        submitBtn.disabled = true;
+    });
+});
+</script>
+{% endblock %}
