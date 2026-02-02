@@ -10,6 +10,17 @@ from app.models import User, Student, Group, Subject, Grade, SystemSettings
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm
 from app.utils import export_to_excel, format_date
 
+# Словарь перевода статусов
+STATUS_MAP = {
+    'active': 'Активный',
+    'expelled': 'Отчислен',
+    'graduated': 'Выпущен',
+    'suspended': 'Отстранён',
+    'transferred': 'Переведён',
+    'inactive': 'Неактивный',
+    'on_leave': 'В отпуске'
+}
+
 main = Blueprint('main', __name__)
 
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
@@ -50,22 +61,6 @@ def apply_filters(query, model):
         filters['status'] = status
     
     return query, filters
-
-# ===================== ДЕКОРАТОРЫ =====================
-def handle_db_exceptions(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except IntegrityError:
-            db.session.rollback()
-            flash_msg('error', 'Запись с такими данными уже существует')
-            return None
-        except Exception as e:
-            db.session.rollback()
-            flash_msg('error', f'Ошибка операции: {str(e)}')
-            return None
-    return wrapper
 
 # ===================== АУТЕНТИФИКАЦИЯ =====================
 @main.route('/')
@@ -300,7 +295,7 @@ def add_grade_to_student(student_id):
 
 @main.route('/students/<int:student_id>/grades/<int:grade_id>/delete', methods=['POST'])
 @login_required
-def delete_student_grade(student_id, grade_id):
+def delete_grade_from_student(student_id, grade_id):
     """Удаление оценки студента со страницы студента"""
     try:
         grade = Grade.query.get_or_404(grade_id)
@@ -590,7 +585,7 @@ def generate_report():
                 'Дата рождения': format_date(s.birth_date),
                 'Email': s.email or '',
                 'Телефон': s.phone or '',
-                'Статус': s.status
+                'Статус': STATUS_MAP.get(s.status, s.status)  # ← перевод на русский
             } for s in query.all()]
             
             filepath = export_to_excel(data, 'students_report')
@@ -642,7 +637,7 @@ def report_students():
                 'Дата рождения': format_date(student.birth_date),
                 'Email': student.email or '',
                 'Телефон': student.phone or '',
-                'Статус': student.status
+                'Статус': STATUS_MAP.get(student.status, student.status)  # ← перевод на русский
             })
         filepath = export_to_excel(data, 'students_report')
         return send_file(filepath, as_attachment=True)
@@ -665,7 +660,7 @@ def report_group(group_id):
                 'Дата рождения': format_date(student.birth_date),
                 'Email': student.email or '',
                 'Телефон': student.phone or '',
-                'Статус': student.status
+                'Статус': STATUS_MAP.get(student.status, student.status)  # ← перевод на русский
             })
         
         filepath = export_to_excel(data, f'group_{group.name}_report')
