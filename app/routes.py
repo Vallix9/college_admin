@@ -1,19 +1,14 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, session, jsonify
+from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.urls import url_parse
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date
-from sqlalchemy import or_, func, desc
+from sqlalchemy import or_, desc
 import functools
-import traceback
-import os
-import json
-import secrets
-
 from app.init_ import db
 from app.models import User, Student, Group, Subject, Grade, SystemSettings
-from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
-from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
+from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm
+from app.utils import export_to_excel, format_date
 
 main = Blueprint('main', __name__)
 
@@ -25,12 +20,6 @@ def flash_msg(type, message):
 def get_settings():
     return SystemSettings.get_settings()
 
-def safe_int(value, default=0):
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return default
-
 def get_pagination_args():
     return {
         'page': request.args.get('page', 1, type=int),
@@ -39,7 +28,6 @@ def get_pagination_args():
 
 def apply_filters(query, model):
     filters = {}
-    
     if 'search' in request.args:
         search = request.args.get('search', '')
         if search:
@@ -86,7 +74,6 @@ def handle_db_exceptions(func):
 def dashboard():
     try:
         settings = get_settings()
-        
         stats = {
             'total_students': Student.query.count(),
             'active_students': Student.query.filter_by(status='active').count(),
@@ -111,7 +98,6 @@ def dashboard():
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('main.dashboard'))
-    
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
@@ -143,7 +129,6 @@ def logout():
 def students():
     query = Student.query
     query, filters = apply_filters(query, Student)
-    
     page_args = get_pagination_args()
     students_paginated = query.order_by(Student.last_name).paginate(
         page=page_args['page'], per_page=page_args['per_page'], error_out=False)
@@ -158,7 +143,6 @@ def students():
 def add_student():
     form = StudentForm()
     form.group_id.choices = [(0, 'Без группы')] + [(g.id, g.name) for g in Group.query.all()]
-    
     if form.validate_on_submit():
         try:
             student = Student(
@@ -181,11 +165,9 @@ def add_student():
         except IntegrityError:
             db.session.rollback()
             flash_msg('error', 'Запись с такими данными уже существует')
-            return None
         except Exception as e:
             db.session.rollback()
             flash_msg('error', f'Ошибка добавления студента: {str(e)}')
-            return None
     
     return render_template('student_form.html', form=form, title='Добавить студента', student=None)
 
@@ -195,7 +177,6 @@ def edit_student(id):
     student = Student.query.get_or_404(id)
     form = StudentForm(obj=student)
     form.group_id.choices = [(0, 'Без группы')] + [(g.id, g.name) for g in Group.query.all()]
-    
     if form.validate_on_submit():
         try:
             form.populate_obj(student)
@@ -206,11 +187,9 @@ def edit_student(id):
         except IntegrityError:
             db.session.rollback()
             flash_msg('error', 'Запись с такими данными уже существует')
-            return None
         except Exception as e:
             db.session.rollback()
             flash_msg('error', f'Ошибка обновления студента: {str(e)}')
-            return None
     
     return render_template('student_form.html', form=form, title='Редактировать студента', student=student)
 
@@ -225,8 +204,118 @@ def delete_student(id):
     except Exception as e:
         db.session.rollback()
         flash_msg('error', f'Ошибка удаления студента: {str(e)}')
-    
     return redirect(url_for('main.students'))
+
+# ===================== СТРАНИЦА СТУДЕНТА =====================
+@main.route('/student/<int:student_id>')
+@login_required
+def view_student(student_id):
+    """Детальная страница студента с управлением оценками"""
+    student = Student.query.get_or_404(student_id)
+    grades = Grade.query.filter_by(student_id=student_id).order_by(Grade.date.desc()).all()
+    
+    grades_by_subject = {}
+    for grade in grades:
+        subject_id = grade.subject_id
+        if subject_id not in grades_by_subject:
+            grades_by_subject[subject_id] = {
+                'subject': grade.subject,
+                'grades': [],
+                'average': 0
+            }
+        grades_by_subject[subject_id]['grades'].append(grade)
+    
+    for subject_id, data in grades_by_subject.items():
+        numeric_grades = []
+        for grade in data['grades']:
+            try:
+                if str(grade.grade_value).isdigit():
+                    numeric_grades.append(int(grade.grade_value))
+                elif grade.grade_value == 'зачет':
+                    numeric_grades.append(5)
+                elif grade.grade_value == 'незачет':
+                    numeric_grades.append(2)
+            except:
+                continue
+        
+        if numeric_grades:
+            data['average'] = sum(numeric_grades) / len(numeric_grades)
+        else:
+            data['average'] = 0
+    
+    all_subjects = Subject.query.order_by(Subject.name).all()
+    
+    grade_form = GradeForm()
+    grade_form.subject_id.choices = [(s.id, s.name) for s in all_subjects]
+    subject_form = SubjectForm()
+    
+    today = date.today()
+    
+    return render_template('student_detail.html',
+                         student=student,
+                         grades_by_subject=grades_by_subject,
+                         all_subjects=all_subjects,
+                         grade_form=grade_form,
+                         subject_form=subject_form,
+                         today=today)
+
+# ===================== ДОБАВЛЕНИЕ ОЦЕНКИ СТУДЕНТУ =====================
+@main.route('/students/<int:student_id>/grades/add', methods=['POST'])
+@login_required
+def add_grade_to_student(student_id):
+    """Добавление оценки конкретному студенту со страницы студента"""
+    student = Student.query.get_or_404(student_id)
+    
+    subject_id = request.form.get('subject_id')
+    grade_value = request.form.get('grade_value')
+    grade_type = request.form.get('grade_type', 'exam')
+    comments = request.form.get('comments', '')
+    
+    if not subject_id or not grade_value:
+        flash_msg('error', 'Пожалуйста, заполните все обязательные поля')
+        return redirect(url_for('main.view_student', student_id=student_id))
+    
+    try:
+        subject = Subject.query.get(subject_id)
+        if not subject:
+            flash_msg('error', 'Выбранный предмет не найден')
+            return redirect(url_for('main.view_student', student_id=student_id))
+        
+        grade = Grade(
+            student_id=student_id,
+            subject_id=subject_id,
+            grade_value=str(grade_value),
+            grade_type=grade_type,
+            date=date.today(),
+            comments=comments
+        )
+        db.session.add(grade)
+        db.session.commit()
+        flash_msg('success', f'Оценка по предмету "{subject.name}" успешно добавлена')
+    except Exception as e:
+        db.session.rollback()
+        flash_msg('error', f'Ошибка добавления оценки: {str(e)}')
+    
+    return redirect(url_for('main.view_student', student_id=student_id))
+
+@main.route('/students/<int:student_id>/grades/<int:grade_id>/delete', methods=['POST'])
+@login_required
+def delete_student_grade(student_id, grade_id):
+    """Удаление оценки студента со страницы студента"""
+    try:
+        grade = Grade.query.get_or_404(grade_id)
+        if grade.student_id != student_id:
+            flash_msg('error', 'Оценка не принадлежит данному студенту')
+            return redirect(url_for('main.view_student', student_id=student_id))
+        
+        db.session.delete(grade)
+        db.session.commit()
+        flash_msg('success', 'Оценка удалена')
+    except Exception as e:
+        db.session.rollback()
+        flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
+    
+    return redirect(url_for('main.view_student', student_id=student_id))
 
 # ===================== ГРУППЫ =====================
 @main.route('/groups')
@@ -238,7 +327,6 @@ def groups():
 @login_required
 def add_group():
     form = GroupForm()
-    
     if form.validate_on_submit():
         try:
             group = Group(
@@ -253,11 +341,9 @@ def add_group():
         except IntegrityError:
             db.session.rollback()
             flash_msg('error', 'Группа с таким названием уже существует')
-            return None
         except Exception as e:
             db.session.rollback()
             flash_msg('error', f'Ошибка добавления группы: {str(e)}')
-            return None
     
     return render_template('group_form.html', form=form, title='Добавить группу', group=None)
 
@@ -266,7 +352,6 @@ def add_group():
 def edit_group(id):
     group = Group.query.get_or_404(id)
     form = GroupForm(obj=group)
-    
     if form.validate_on_submit():
         try:
             form.populate_obj(group)
@@ -276,11 +361,9 @@ def edit_group(id):
         except IntegrityError:
             db.session.rollback()
             flash_msg('error', 'Группа с таким названием уже существует')
-            return None
         except Exception as e:
             db.session.rollback()
             flash_msg('error', f'Ошибка обновления группы: {str(e)}')
-            return None
     
     return render_template('group_form.html', form=form, title='Редактировать группу', group=group)
 
@@ -295,59 +378,176 @@ def delete_group(id):
     except Exception as e:
         db.session.rollback()
         flash_msg('error', f'Ошибка удаления группы: {str(e)}')
-    
     return redirect(url_for('main.groups'))
+
+# ===================== ПРЕДМЕТЫ =====================
+@main.route('/subjects')
+@login_required
+def subjects():
+    subjects_list = Subject.query.order_by(Subject.name).all()
+    return render_template('subjects.html', subjects=subjects_list)
+
+@main.route('/subjects/add', methods=['GET', 'POST'])
+@login_required
+def add_subject():
+    if request.method == 'POST':
+        subjects_text = request.form.get('subjects_text')
+        if subjects_text:
+            lines = subjects_text.strip().split('\n')
+            added_count = 0
+            for line in lines:
+                line = line.strip()
+                if line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[-1].isdigit():
+                        name = ' '.join(parts[:-1])
+                        hours = int(parts[-1])
+                    else:
+                        name = line
+                        hours = 72
+                    
+                    existing = Subject.query.filter_by(name=name).first()
+                    if not existing:
+                        try:
+                            subject = Subject(name=name, hours=hours)
+                            db.session.add(subject)
+                            added_count += 1
+                        except:
+                            continue
+            
+            if added_count > 0:
+                db.session.commit()
+                flash_msg('success', f'Добавлено {added_count} новых предметов')
+            else:
+                flash_msg('warning', 'Не удалось добавить ни одного предмета (возможно, они уже существуют)')
+            
+            return redirect(url_for('main.subjects'))
+        else:
+            name = request.form.get('name')
+            hours = request.form.get('hours', 72, type=int)
+            
+            if not name:
+                flash_msg('error', 'Введите название предмета')
+                return redirect(url_for('main.subjects'))
+            
+            try:
+                subject = Subject(name=name, hours=hours)
+                db.session.add(subject)
+                db.session.commit()
+                flash_msg('success', f'Предмет "{subject.name}" успешно добавлен')
+                return redirect(url_for('main.subjects'))
+            except IntegrityError:
+                db.session.rollback()
+                flash_msg('error', 'Предмет с таким названием уже существует')
+            except Exception as e:
+                db.session.rollback()
+                flash_msg('error', f'Ошибка добавления предмета: {str(e)}')
+    
+    form = SubjectForm()
+    return render_template('subject_form.html', form=form, title='Добавить предмет')
+
+@main.route('/subjects/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_subject(id):
+    subject = Subject.query.get_or_404(id)
+    form = SubjectForm(obj=subject)
+    if form.validate_on_submit():
+        try:
+            form.populate_obj(subject)
+            db.session.commit()
+            flash_msg('success', f'Предмет "{subject.name}" обновлен')
+            return redirect(url_for('main.subjects'))
+        except IntegrityError:
+            db.session.rollback()
+            flash_msg('error', 'Предмет с таким названием уже существует')
+        except Exception as e:
+            db.session.rollback()
+            flash_msg('error', f'Ошибка обновления предмета: {str(e)}')
+    
+    return render_template('subject_form.html', form=form, title='Редактировать предмет', subject=subject)
+
+@main.route('/subjects/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_subject(id):
+    subject = Subject.query.get_or_404(id)
+    try:
+        grade_count = Grade.query.filter_by(subject_id=id).count()
+        if grade_count > 0:
+            flash_msg('error', f'Нельзя удалить предмет "{subject.name}", так как по нему уже есть {grade_count} оценок')
+            return redirect(url_for('main.subjects'))
+        db.session.delete(subject)
+        db.session.commit()
+        flash_msg('success', f'Предмет "{subject.name}" удален')
+    except Exception as e:
+        db.session.rollback()
+        flash_msg('error', f'Ошибка удаления предмета: {str(e)}')
+    
+    return redirect(url_for('main.subjects'))
 
 # ===================== ОЦЕНКИ =====================
 @main.route('/grades')
 @login_required
 def grades():
-    query = Grade.query
+    group_id = request.args.get('group', type=int)
+    student_id = request.args.get('student', type=int)
+    query = Grade.query.join(Student).join(Subject)
     
-    group_filter = request.args.get('group', 'all')
-    student_filter = request.args.get('student', 'all')
-    
-    if group_filter != 'all':
-        query = query.join(Student).filter(Student.group_id == group_filter)
-    
-    if student_filter != 'all':
-        query = query.filter_by(student_id=student_filter)
+    if group_id:
+        query = query.filter(Student.group_id == group_id)
+    if student_id:
+        query = query.filter(Grade.student_id == student_id)
     
     page_args = get_pagination_args()
-    grades_paginated = query.order_by(Grade.date.desc()).paginate(
+    grades_paginated = query.order_by(desc(Grade.date)).paginate(
         page=page_args['page'], per_page=page_args['per_page'], error_out=False)
+    
+    groups = Group.query.all()
+    students = Student.query.order_by(Student.last_name).all()
+    
+    current_filters = {}
+    if group_id:
+        current_filters['group'] = group_id
+    if student_id:
+        current_filters['student'] = student_id
     
     return render_template('grades.html', 
                          grades=grades_paginated,
-                         groups=Group.query.all(),
-                         students=Student.query.all(),
-                         current_filters={'group': group_filter, 'student': student_filter})
+                         groups=groups,
+                         students=students,
+                         current_filters=current_filters)
 
 @main.route('/grades/add', methods=['GET', 'POST'])
 @login_required
 def add_grade():
     form = GradeForm()
-    form.student_id.choices = [(s.id, f'{s.last_name} {s.first_name}') for s in Student.query.all()]
-    form.subject_id.choices = [(s.id, s.name) for s in Subject.query.all()]
-    
     if form.validate_on_submit():
         try:
+            student = Student.query.get(form.student_id.data)
+            subject = Subject.query.get(form.subject_id.data)
+            
+            if not student:
+                flash_msg('error', 'Выбранный студент не найден')
+                return redirect(url_for('main.add_grade'))
+            
+            if not subject:
+                flash_msg('error', 'Выбранный предмет не найден')
+                return redirect(url_for('main.add_grade'))
+            
             grade = Grade(
                 student_id=form.student_id.data,
                 subject_id=form.subject_id.data,
-                grade_value=form.grade_value.data,
+                grade_value=str(form.grade_value.data),
                 grade_type=form.grade_type.data,
                 date=form.date.data,
                 comments=form.comments.data
             )
             db.session.add(grade)
             db.session.commit()
-            flash_msg('success', 'Оценка успешно добавлена')
+            flash_msg('success', f'Оценка по предмету "{subject.name}" для студента {student.full_name} успешно добавлена')
             return redirect(url_for('main.grades'))
         except Exception as e:
             db.session.rollback()
             flash_msg('error', f'Ошибка добавления оценки: {str(e)}')
-            return None
     
     return render_template('grade_form.html', form=form, title='Добавить оценку')
 
@@ -362,7 +562,6 @@ def delete_grade(id):
     except Exception as e:
         db.session.rollback()
         flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
-    
     return redirect(url_for('main.grades'))
 
 # ===================== ОТЧЕТЫ =====================
@@ -378,7 +577,6 @@ def generate_report():
     group_id = request.form.get('group_id')
     start_date = request.form.get('start_date')
     end_date = request.form.get('end_date')
-    
     try:
         if report_type == 'students':
             query = Student.query
@@ -433,7 +631,6 @@ def generate_report():
 @main.route('/reports/students')
 @login_required
 def report_students():
-    """Экспорт всех студентов"""
     try:
         students = Student.query.all()
         data = []
@@ -447,7 +644,6 @@ def report_students():
                 'Телефон': student.phone or '',
                 'Статус': student.status
             })
-        
         filepath = export_to_excel(data, 'students_report')
         return send_file(filepath, as_attachment=True)
     except Exception as e:
@@ -457,11 +653,9 @@ def report_students():
 @main.route('/reports/group/<int:group_id>')
 @login_required
 def report_group(group_id):
-    """Экспорт студентов группы"""
     try:
         group = Group.query.get_or_404(group_id)
         students = Student.query.filter_by(group_id=group_id).all()
-        
         data = []
         for student in students:
             data.append({
@@ -480,296 +674,13 @@ def report_group(group_id):
         flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
         return redirect(url_for('main.reports'))
 
-# ===================== НАСТРОЙКИ =====================
-@main.route('/settings', methods=['GET', 'POST'])
+# ===================== ПРОСТЫЕ НАСТРОЙКИ =====================
+@main.route('/settings')
 @login_required
 def settings():
-    settings_obj = get_settings()
-    form = SettingsForm(obj=settings_obj)
-    
-    if form.validate_on_submit():
-        if form.reset.data:
-            settings_obj.college_name = 'Технический колледж'
-            settings_obj.academic_year = '2024-2025'
-            settings_obj.max_students_per_group = 25
-            settings_obj.export_format = 'excel'
-            settings_obj.enable_email_notifications = False
-            settings_obj.enable_system_notifications = True
-            settings_obj.theme_color = 'purple'
-            settings_obj.items_per_page = 20
-            settings_obj.auto_backup = True
-            settings_obj.backup_frequency = 'daily'
-            
-            db.session.commit()
-            flash_msg('success', 'Настройки сброшены к значениям по умолчанию!')
-            return redirect(url_for('main.settings'))
-        
-        try:
-            form.populate_obj(settings_obj)
-            
-            if form.new_password.data:
-                current_user.set_password(form.new_password.data)
-                flash_msg('success', 'Пароль успешно изменен!')
-            
-            db.session.commit()
-            flash_msg('success', 'Настройки успешно сохранены!')
-            session['theme_color'] = settings_obj.theme_color
-            
-            return redirect(url_for('main.settings'))
-            
-        except Exception as e:
-            db.session.rollback()
-            flash_msg('error', f'Ошибка сохранения настроек: {str(e)}')
-    
-    return render_template('settings.html', form=form, settings=settings_obj)
-
-@main.route('/settings/backup', methods=['GET', 'POST'])
-@login_required
-def settings_backup():
-    """Управление резервными копиями"""
-    form = BackupForm()
-    
-    if form.validate_on_submit():
-        try:
-            backup_file = create_backup(
-                backup_type=form.backup_type.data,
-                include_files=form.include_files.data,
-                description=form.description.data
-            )
-            flash_msg('success', f'Резервная копия создана: {backup_file}')
-            return redirect(url_for('main.settings_backup'))
-        except Exception as e:
-            flash_msg('error', f'Ошибка создания резервной копии: {str(e)}')
-    
-    backup_dir = 'backups'
-    backups = []
-    if os.path.exists(backup_dir):
-        files = os.listdir(backup_dir)
-        for f in files:
-            if f.endswith('.backup'):
-                filepath = os.path.join(backup_dir, f)
-                backups.append({
-                    'filename': f,
-                    'size': os.path.getsize(filepath),
-                    'size_mb': round(os.path.getsize(filepath) / 1024 / 1024, 2),
-                    'date': datetime.fromtimestamp(os.path.getmtime(filepath)).strftime('%Y-%m-%d %H:%M'),
-                    'type': f.split('_')[2].split('.')[0] if '_' in f else 'full'
-                })
-        backups.sort(key=lambda x: x['date'], reverse=True)
-    
-    return render_template('settings_backup.html', form=form, backups=backups)
-
-@main.route('/settings/backup/<filename>/restore', methods=['POST'])
-@login_required
-def restore_backup_file(filename):
-    """Восстановление из резервной копии"""
-    try:
-        backup_path = os.path.join('backups', filename)
-        if not os.path.exists(backup_path):
-            flash_msg('error', 'Файл резервной копии не найден')
-            return redirect(url_for('main.settings_backup'))
-        
-        restore_backup(backup_path)
-        flash_msg('success', 'Резервная копия успешно восстановлена!')
-    except Exception as e:
-        flash_msg('error', f'Ошибка восстановления: {str(e)}')
-    
-    return redirect(url_for('main.settings_backup'))
-
-@main.route('/settings/backup/<filename>/delete', methods=['POST'])
-@login_required
-def delete_backup_file(filename):
-    """Удаление резервной копии"""
-    try:
-        backup_path = os.path.join('backups', filename)
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
-            flash_msg('success', 'Резервная копия удалена')
-        else:
-            flash_msg('error', 'Файл не найден')
-    except Exception as e:
-        flash_msg('error', f'Ошибка удаления: {str(e)}')
-    
-    return redirect(url_for('main.settings_backup'))
-
-@main.route('/settings/import', methods=['GET', 'POST'])
-@login_required
-def settings_import():
-    """Импорт данных"""
-    form = ImportForm()
-    
-    if form.validate_on_submit():
-        try:
-            file = form.file.data
-            result = import_from_file(
-                file=file,
-                import_type=form.import_type.data,
-                import_mode=form.import_mode.data
-            )
-            flash_msg('success', f'Импорт завершен: {result}')
-            return redirect(url_for('main.settings_import'))
-        except Exception as e:
-            flash_msg('error', f'Ошибка импорта: {str(e)}')
-    
-    return render_template('settings_import.html', form=form)
-
-@main.route('/settings/export-template/<template_type>')
-@login_required
-def download_import_template(template_type):
-    """Скачивание шаблона для импорта"""
-    templates = {
-        'students': 'templates/import_students_template.xlsx',
-        'grades': 'templates/import_grades_template.xlsx',
-        'groups': 'templates/import_groups_template.xlsx'
-    }
-    
-    if template_type in templates and os.path.exists(templates[template_type]):
-        return send_file(templates[template_type], as_attachment=True)
-    
-    flash_msg('error', 'Шаблон не найден')
-    return redirect(url_for('main.settings_import'))
-
-@main.route('/settings/logs')
-@login_required
-def view_logs():
-    """Просмотр логов системы"""
-    log_file = 'app.log'
-    logs = []
-    
-    if os.path.exists(log_file):
-        with open(log_file, 'r', encoding='utf-8') as f:
-            logs = f.readlines()[-100:]
-    
-    return render_template('view_logs.html', logs=logs)
-
-@main.route('/settings/api')
-@login_required
-def api_settings():
-    """Настройки API"""
-    return render_template('api_settings.html')
-
-@main.route('/settings/api/generate-key', methods=['POST'])
-@login_required
-def generate_api_key():
-    """Генерация API ключа"""
-    api_key = secrets.token_urlsafe(32)
-    session['api_key'] = api_key
-    flash_msg('success', 'Новый API ключ сгенерирован')
-    return redirect(url_for('main.api_settings'))
+    return render_template('settings.html')
 
 # ===================== API =====================
-@main.route('/api/settings', methods=['GET'])
-@login_required
-def get_settings_api():
-    settings = get_settings()
-    return jsonify(settings.to_dict())
-
-@main.route('/api/settings/update', methods=['POST'])
-@login_required
-def update_settings_api():
-    try:
-        data = request.get_json()
-        settings = get_settings()
-        
-        for key, value in data.items():
-            if hasattr(settings, key):
-                setattr(settings, key, value)
-        
-        settings.updated_at = datetime.utcnow()
-        db.session.commit()
-        
-        return jsonify({'success': True, 'message': 'Настройки обновлены'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-
-@main.route('/api/system/health')
-def system_health():
-    health = {
-        'status': 'healthy',
-        'timestamp': datetime.utcnow().isoformat(),
-        'database': 'connected',
-        'tables': {
-            'users': User.query.count(),
-            'students': Student.query.count(),
-            'groups': Group.query.count(),
-            'grades': Grade.query.count()
-        }
-    }
-    return jsonify(health)
-
 @main.route('/health')
 def health_check():
     return {'status': 'ok', 'timestamp': datetime.utcnow().isoformat()}
-
-@main.route('/api/system/clear-logs', methods=['POST'])
-@login_required
-def clear_logs():
-    """Очистка логов"""
-    try:
-        log_file = 'app.log'
-        if os.path.exists(log_file):
-            open(log_file, 'w').close()
-        return jsonify({'success': True, 'message': 'Логи очищены'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@main.route('/api/system/download-logs')
-@login_required
-def download_logs():
-    """Скачивание логов"""
-    log_file = 'app.log'
-    
-    if os.path.exists(log_file):
-        return send_file(log_file, as_attachment=True, download_name=f'logs_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
-    else:
-        flash_msg('error', 'Файл логов не найден')
-        return redirect(url_for('main.view_logs'))
-
-@main.route('/api/system/logs/recent')
-@login_required
-def get_recent_logs():
-    """Получение последних логов (API)"""
-    log_file = 'app.log'
-    logs = []
-    
-    if os.path.exists(log_file):
-        with open(log_file, 'r', encoding='utf-8') as f:
-            logs = f.readlines()[-50:]
-    
-    return jsonify({'logs': logs})
-
-# ===================== ДОПОЛНИТЕЛЬНЫЕ API МАРШРУТЫ =====================
-@main.route('/api/system/api-usage')
-@login_required
-def api_usage():
-    """Статистика использования API"""
-    return jsonify({
-        'total_requests': 0,
-        'requests_by_endpoint': {},
-        'last_30_days': []
-    })
-
-@main.route('/api/settings/integrations', methods=['GET', 'POST'])
-@login_required
-def integrations_settings():
-    """Настройки интеграций"""
-    if request.method == 'GET':
-        return jsonify({
-            'enableWebhooks': False,
-            'webhookUrl': '',
-            'events': {
-                'newStudent': False,
-                'newGrade': False,
-                'statusChange': False
-            }
-        })
-    else:
-        data = request.get_json()
-        return jsonify({'success': True, 'message': 'Настройки сохранены'})
-
-@main.route('/api/system/revoke-api-key', methods=['POST'])
-@login_required
-def revoke_api_key():
-    """Отзыв API ключа"""
-    session.pop('api_key', None)
-    return jsonify({'success': True, 'message': 'API ключ отозван'})

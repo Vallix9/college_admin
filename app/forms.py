@@ -1,8 +1,8 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField
+from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField
 from wtforms.validators import DataRequired, Length, EqualTo, Optional, Email, ValidationError, NumberRange
 from wtforms.widgets import ListWidget, CheckboxInput
-from app.models import User
+from app.models import User, Subject
 
 class MultiCheckboxField(SelectMultipleField):
     widget = ListWidget(prefix_label=False)
@@ -39,26 +39,42 @@ class GroupForm(FlaskForm):
     year = IntegerField('Год поступления*', validators=[DataRequired(), NumberRange(min=2000, max=2100)])
     submit = SubmitField('Сохранить')
 
-class GradeForm(FlaskForm):
-    student_id = SelectField('Студент*', coerce=int, validators=[DataRequired()])
-    subject_id = SelectField('Предмет*', coerce=int, validators=[DataRequired()])
-    grade_value = IntegerField('Оценка*', validators=[DataRequired(), NumberRange(min=1, max=5)])
-    grade_type = SelectField('Тип оценки', choices=[
-        ('lecture', 'Лекция'),
-        ('practice', 'Практика'),
-        ('exam', 'Экзамен'),
-        ('test', 'Зачет'),
-        ('homework', 'Домашняя работа'),
-        ('lab', 'Лабораторная работа')
-    ], default='lecture')
-    date = DateField('Дата*', format='%Y-%m-%d', validators=[DataRequired()])
-    comments = TextAreaField('Комментарий', validators=[Optional(), Length(max=500)])
-    submit = SubmitField('Сохранить')
-
 class SubjectForm(FlaskForm):
     name = StringField('Название предмета*', validators=[DataRequired(), Length(max=100)])
     hours = IntegerField('Количество часов', default=72, validators=[Optional(), NumberRange(min=1)])
     submit = SubmitField('Сохранить')
+
+class GradeForm(FlaskForm):
+    student_id = SelectField('Студент*', coerce=int, validators=[DataRequired()], choices=[])
+    subject_id = SelectField('Предмет*', coerce=int, validators=[DataRequired()], choices=[])
+    grade_value = SelectField('Оценка*', choices=[
+        ('5', '5 (Отлично)'),
+        ('4', '4 (Хорошо)'),
+        ('3', '3 (Удовлетворительно)'),
+        ('2', '2 (Неудовлетворительно)'),
+        ('зачет', 'Зачет'),
+        ('незачет', 'Незачет')
+    ], validators=[DataRequired()])
+    grade_type = SelectField('Тип оценки', choices=[
+        ('exam', 'Экзамен'),
+        ('test', 'Зачет'),
+        ('lab', 'Лабораторная работа'),
+        ('practice', 'Практика'),
+        ('homework', 'Домашняя работа'),
+        ('lecture', 'Лекция')
+    ], default='exam')
+    date = DateField('Дата*', format='%Y-%m-%d', validators=[DataRequired()])
+    comments = TextAreaField('Комментарий', validators=[Optional(), Length(max=500)])
+    submit = SubmitField('Сохранить')
+    
+    def __init__(self, *args, **kwargs):
+        super(GradeForm, self).__init__(*args, **kwargs)
+        # Динамически обновляем выбор студентов и предметов
+        from app.models import Student, Subject
+        self.student_id.choices = [(s.id, f'{s.last_name} {s.first_name} ({s.student_id})') 
+                                  for s in Student.query.order_by(Student.last_name).all()]
+        self.subject_id.choices = [(s.id, f'{s.name} ({s.hours}ч)') 
+                                  for s in Subject.query.order_by(Subject.name).all()]
 
 class SettingsForm(FlaskForm):
     """Форма настроек системы"""

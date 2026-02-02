@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - {{ student.full_name }}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.students') }}">Студенты</a></li>
+<li class="breadcrumb-item active">{{ student.last_name }} {{ student.first_name }}</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-person-badge"></i> {{ student.full_name }}
+{% endblock %}
+
+{% block header_actions %}
+<div class="d-flex gap-2">
+    <a href="{{ url_for('main.edit_student', id=student.id) }}" class="btn btn-outline-primary">
+        <i class="bi bi-pencil"></i> Редактировать
+    </a>
+    <a href="{{ url_for('main.students') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Назад
+    </a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Информация о студенте -->
+    <div class="col-md-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Информация о студенте</h5>
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <div class="student-avatar mb-3">
+                        <i class="bi bi-person-circle display-1 text-primary"></i>
+                    </div>
+                    <h4>{{ student.full_name }}</h4>
+                    <p class="text-muted mb-0">ID: {{ student.student_id }}</p>
+                </div>
+                
+                <div class="student-info">
+                    <table class="table table-sm">
+                        <tr>
+                            <th width="40%">Группа:</th>
+                            <td>
+                                {% if student.group %}
+                                <span class="badge bg-primary">{{ student.group.name }}</span>
+                                {% else %}
+                                <span class="text-muted">Не указана</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Пол:</th>
+                            <td>{{ 'Мужской' if student.gender == 'M' else 'Женский' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Дата рождения:</th>
+                            <td>{{ student.birth_date.strftime('%d.%m.%Y') if student.birth_date else '—' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Email:</th>
+                            <td>{{ student.email or '—' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Телефон:</th>
+                            <td>{{ student.phone or '—' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Статус:</th>
+                            <td>
+                                {% if student.status == 'active' %}
+                                <span class="badge bg-success">Активен</span>
+                                {% elif student.status == 'academic_leave' %}
+                                <span class="badge bg-warning">Академ</span>
+                                {% elif student.status == 'expelled' %}
+                                <span class="badge bg-danger">Отчислен</span>
+                                {% elif student.status == 'graduated' %}
+                                <span class="badge bg-info">Выпускник</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Средний балл:</th>
+                            <td>
+                                <span class="badge {% if student.average_grade() >= 4.5 %}bg-success{% elif student.average_grade() >= 3.5 %}bg-primary{% elif student.average_grade() > 0 %}bg-warning{% else %}bg-secondary{% endif %}">
+                                    {{ "%.2f"|format(student.average_grade()) if student.average_grade() else 'Нет оценок' }}
+                                </span>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div class="d-grid gap-2 mt-3">
+                    <a href="{{ url_for('main.grades') }}" class="btn btn-outline-primary">
+                        <i class="bi bi-journal-text"></i> Все оценки
+                    </a>
+                    <a href="{{ url_for('main.reports') }}" class="btn btn-outline-success">
+                        <i class="bi bi-file-earmark-pdf"></i> Создать отчет
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Блок с оценками -->
+    <div class="col-md-8">
+        <!-- Быстрая оценка -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Быстрая оценка</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('main.add_grade_to_student', student_id=student.id) }}">
+                    {{ grade_form.hidden_tag() }}
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Предмет</label>
+                            <select name="subject_id" class="form-select" required>
+                                <option value="">Выберите предмет</option>
+                                {% for subject in all_subjects %}
+                                <option value="{{ subject.id }}">{{ subject.name }} ({{ subject.hours }}ч)</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Оценка</label>
+                            <select name="grade_value" class="form-select" required>
+                                <option value="">Выбрать</option>
+                                <option value="5">5 (Отлично)</option>
+                                <option value="4">4 (Хорошо)</option>
+                                <option value="3">3 (Удовл.)</option>
+                                <option value="2">2 (Неуд.)</option>
+                                <option value="зачет">Зачет</option>
+                                <option value="незачет">Незачет</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Тип</label>
+                            <select name="grade_type" class="form-select">
+                                <option value="exam">Экзамен</option>
+                                <option value="test">Зачет</option>
+                                <option value="lab">Лаб. работа</option>
+                                <option value="practice">Практика</option>
+                                <option value="homework">Домашняя</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Дата</label>
+                            <input type="date" name="date" class="form-control" value="{{ today.isoformat() }}" required>
+                        </div>
+                        <div class="col-md-2 d-flex align-items-end">
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="bi bi-plus-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="row mt-2">
+                        <div class="col-md-12">
+                            <input type="text" name="comments" class="form-control" placeholder="Комментарий (необязательно)">
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Оценки по предметам -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Успеваемость по предметам</h5>
+                <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addSubjectModal">
+                    <i class="bi bi-plus-circle"></i> Новый предмет
+                </button>
+            </div>
+            <div class="card-body">
+                {% if grades_by_subject %}
+                    {% for subject_id, data in grades_by_subject.items() %}
+                    <div class="subject-grades mb-4 pb-3 border-bottom">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="mb-0">
+                                {{ data.subject.name }}
+                                <small class="text-muted">({{ data.subject.hours }}ч)</small>
+                            </h6>
+                            <div>
+                                <span class="badge {% if data.average >= 4.5 %}bg-success{% elif data.average >= 3.5 %}bg-primary{% else %}bg-warning{% endif %}">
+                                    Средний: {{ "%.2f"|format(data.average) }}
+                                </span>
+                                <button class="btn btn-sm btn-outline-primary ms-2" data-bs-toggle="collapse" 
+                                        data-bs-target="#grades{{ subject_id }}" aria-expanded="true">
+                                    <i class="bi bi-chevron-down"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="collapse show" id="grades{{ subject_id }}">
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Дата</th>
+                                            <th>Оценка</th>
+                                            <th>Тип</th>
+                                            <th>Комментарий</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for grade in data.grades %}
+                                        <tr>
+                                            <td>{{ grade.date.strftime('%d.%m.%Y') }}</td>
+                                            <td>
+                                                {% if grade.grade_value in ['5', '4', '3', '2'] %}
+                                                    {% if grade.grade_value == '5' %}
+                                                    <span class="badge bg-success">{{ grade.grade_value }}</span>
+                                                    {% elif grade.grade_value == '4' %}
+                                                    <span class="badge bg-primary">{{ grade.grade_value }}</span>
+                                                    {% elif grade.grade_value == '3' %}
+                                                    <span class="badge bg-warning">{{ grade.grade_value }}</span>
+                                                    {% else %}
+                                                    <span class="badge bg-danger">{{ grade.grade_value }}</span>
+                                                    {% endif %}
+                                                {% else %}
+                                                    {% if grade.grade_value == 'зачет' %}
+                                                    <span class="badge bg-success">Зачет</span>
+                                                    {% else %}
+                                                    <span class="badge bg-danger">Незачет</span>
+                                                    {% endif %}
+                                                {% endif %}
+                                            </td>
+                                            <td>{{ grade.grade_type or '—' }}</td>
+                                            <td>{{ grade.comments or '—' }}</td>
+                                            <td>
+                                                <form method="POST" action="{{ url_for('main.delete_student_grade', student_id=student.id, grade_id=grade.id) }}" 
+                                                      onsubmit="return confirm('Удалить эту оценку?')" style="display: inline;">
+                                                    {{ grade_form.hidden_tag() }}
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                                                        <i class="bi bi-trash"></i>
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <!-- Форма добавления новой оценки по этому предмету -->
+                            <div class="mt-2">
+                                <form method="POST" action="{{ url_for('main.add_grade_to_student', student_id=student.id) }}">
+                                    {{ grade_form.hidden_tag() }}
+                                    <input type="hidden" name="subject_id" value="{{ subject_id }}">
+                                    
+                                    <div class="row g-2">
+                                        <div class="col-md-3">
+                                            <select name="grade_value" class="form-select form-select-sm" required>
+                                                <option value="">Оценка</option>
+                                                <option value="5">5 (Отлично)</option>
+                                                <option value="4">4 (Хорошо)</option>
+                                                <option value="3">3 (Удовл.)</option>
+                                                <option value="2">2 (Неуд.)</option>
+                                                <option value="зачет">Зачет</option>
+                                                <option value="незачет">Незачет</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <select name="grade_type" class="form-select form-select-sm">
+                                                <option value="exam">Экзамен</option>
+                                                <option value="test">Зачет</option>
+                                                <option value="lab">Лаб. работа</option>
+                                                <option value="practice">Практика</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <input type="date" name="date" class="form-control form-control-sm" value="{{ today.isoformat() }}" required>
+                                        </div>
+                                        <div class="col-md-2">
+                                            <input type="text" name="comments" class="form-control form-control-sm" placeholder="Комментарий">
+                                        </div>
+                                        <div class="col-md-1">
+                                            <button type="submit" class="btn btn-sm btn-success w-100">
+                                                <i class="bi bi-plus"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="bi bi-journal-x display-4 text-muted mb-3"></i>
+                        <h5 class="text-muted">Нет оценок</h5>
+                        <p class="text-muted">Добавьте первую оценку для этого студента</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно для добавления нового предмета -->
+<div class="modal fade" id="addSubjectModal" tabindex="-1" aria-labelledby="addSubjectModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.add_subject') }}">
+                {{ subject_form.hidden_tag() }}
+                
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addSubjectModalLabel">Добавить новый предмет</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        {{ subject_form.name.label(class="form-label") }}
+                        {{ subject_form.name(class="form-control", placeholder="Например: Математика, Физика") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ subject_form.hours.label(class="form-label") }}
+                        {{ subject_form.hours(class="form-control", placeholder="72") }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Добавить предмет</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно для детального добавления оценки -->
+<div class="modal fade" id="addGradeModal" tabindex="-1" aria-labelledby="addGradeModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.add_grade_to_student', student_id=student.id) }}">
+                {{ grade_form.hidden_tag() }}
+                
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addGradeModalLabel">Добавить оценку</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        {{ grade_form.subject_id.label(class="form-label") }}
+                        {{ grade_form.subject_id(class="form-select") }}
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            {{ grade_form.grade_value.label(class="form-label") }}
+                            {{ grade_form.grade_value(class="form-select") }}
+                        </div>
+                        <div class="col-md-6">
+                            {{ grade_form.grade_type.label(class="form-label") }}
+                            {{ grade_form.grade_type(class="form-select") }}
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        {{ grade_form.date.label(class="form-label") }}
+                        {{ grade_form.date(class="form-control", type="date") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ grade_form.comments.label(class="form-label") }}
+                        {{ grade_form.comments(class="form-control", rows="2", placeholder="Дополнительные комментарии...") }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Добавить оценку</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<style>
+.student-avatar {
+    width: 100px;
+    height: 100px;
+    margin: 0 auto;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+}
+
+.subject-grades {
+    transition: all 0.3s ease;
+}
+
+.subject-grades:hover {
+    background-color: rgba(111, 66, 193, 0.05);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.grade-badge {
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-weight: bold;
+    color: white;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Показ/скрытие оценок по предметам
+    document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(button => {
+        button.addEventListener('click', function() {
+            const icon = this.querySelector('i');
+            if (icon.classList.contains('bi-chevron-down')) {
+                icon.className = 'bi bi-chevron-up';
+            } else {
+                icon.className = 'bi bi-chevron-down';
+            }
+        });
+    });
+    
+    // Подтверждение удаления оценки
+    document.querySelectorAll('form[onsubmit*="confirm"]').forEach(form => {
+        form.addEventListener('submit', function(e) {
+            if (!confirm('Вы уверены, что хотите удалить эту оценку?')) {
+                e.preventDefault();
+                return false;
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

@@ -1,467 +1,49 @@
 {% extends "base.html" %}
 
-{% block title %}Настройки системы{% endblock %}
+{% block title %}Настройки{% endblock %}
 
 {% block breadcrumb %}
 <li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
-<li class="breadcrumb-item active" aria-current="page">Настройки</li>
+<li class="breadcrumb-item active">Настройки</li>
 {% endblock %}
 
 {% block page_title %}
-<i class="bi bi-gear me-2"></i>Настройки системы
+<i class="bi bi-gear me-2"></i>Настройки
 {% endblock %}
 
 {% block page_subtitle %}
-Управление параметрами приложения и системными настройками
-{% endblock %}
-
-{% block head %}
-<style>
-    .settings-section {
-        border-left: 4px solid var(--primary-color);
-        padding-left: 15px;
-        margin-bottom: 30px;
-    }
-    
-    .settings-section h5 {
-        color: var(--primary-color);
-        margin-bottom: 15px;
-    }
-    
-    .form-check-input:checked {
-        background-color: var(--primary-color);
-        border-color: var(--primary-color);
-    }
-    
-    .backup-card {
-        border: 2px solid #e9ecef;
-        border-radius: 10px;
-        padding: 15px;
-        margin-bottom: 15px;
-        transition: all 0.3s;
-    }
-    
-    .backup-card:hover {
-        border-color: var(--primary-color);
-        background-color: rgba(111, 66, 193, 0.05);
-    }
-    
-    .settings-nav {
-        position: sticky;
-        top: 20px;
-    }
-    
-    .settings-nav .nav-link {
-        color: #495057;
-        border-left: 3px solid transparent;
-        padding: 8px 15px;
-        margin-bottom: 5px;
-        border-radius: 0 5px 5px 0;
-    }
-    
-    .settings-nav .nav-link:hover {
-        color: var(--primary-color);
-        background-color: rgba(111, 66, 193, 0.05);
-    }
-    
-    .settings-nav .nav-link.active {
-        color: var(--primary-color);
-        border-left-color: var(--primary-color);
-        background-color: rgba(111, 66, 193, 0.1);
-        font-weight: 500;
-    }
-    
-    .theme-preview {
-        width: 30px;
-        height: 30px;
-        border-radius: 5px;
-        display: inline-block;
-        margin-right: 10px;
-        cursor: pointer;
-        border: 2px solid transparent;
-        transition: transform 0.2s;
-    }
-    
-    .theme-preview:hover {
-        transform: scale(1.1);
-    }
-    
-    .theme-preview.selected {
-        border-color: #333;
-        transform: scale(1.1);
-    }
-    
-    .theme-purple { background-color: #6f42c1; }
-    .theme-blue { background-color: #0d6efd; }
-    .theme-green { background-color: #198754; }
-    .theme-red { background-color: #dc3545; }
-    .theme-dark { background-color: #212529; }
-</style>
+Базовая страница настроек
 {% endblock %}
 
 {% block content %}
 <div class="row">
-    <!-- Боковая навигация -->
-    <div class="col-lg-3 mb-4">
-        <div class="settings-nav">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="mb-0">Разделы настроек</h6>
-                </div>
-                <div class="card-body p-0">
-                    <div class="nav flex-column">
-                        <a class="nav-link active" href="#basic-settings">
-                            <i class="bi bi-building me-2"></i>Основные
-                        </a>
-                        <a class="nav-link" href="#display-settings">
-                            <i class="bi bi-palette me-2"></i>Внешний вид
-                        </a>
-                        <a class="nav-link" href="#export-settings">
-                            <i class="bi bi-download me-2"></i>Экспорт
-                        </a>
-                        <a class="nav-link" href="#notification-settings">
-                            <i class="bi bi-bell me-2"></i>Уведомления
-                        </a>
-                        <a class="nav-link" href="#backup-settings">
-                            <i class="bi bi-hdd me-2"></i>Резервное копирование
-                        </a>
-                        <a class="nav-link" href="#password-settings">
-                            <i class="bi bi-key me-2"></i>Безопасность
-                        </a>
-                        <div class="dropdown-divider"></div>
-                        <a class="nav-link" href="{{ url_for('main.settings_backup') }}">
-                            <i class="bi bi-hdd-stack me-2"></i>Управление резервными копиями
-                        </a>
-                        <a class="nav-link" href="{{ url_for('main.settings_import') }}">
-                            <i class="bi bi-upload me-2"></i>Импорт данных
-                        </a>
-                        <a class="nav-link" href="{{ url_for('main.view_logs') }}">
-                            <i class="bi bi-journal-text me-2"></i>Логи системы
-                        </a>
-                        <a class="nav-link" href="{{ url_for('main.api_settings') }}">
-                            <i class="bi bi-plug me-2"></i>Настройки API
-                        </a>
-                    </div>
-                </div>
+    <div class="col-md-6 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Информация о системе</h5>
             </div>
-            
-            <!-- Быстрые действия -->
-            <div class="card mt-3">
-                <div class="card-body">
-                    <h6 class="card-title">Быстрые действия</h6>
-                    <div class="d-grid gap-2">
-                        <button type="submit" form="settings-form" class="btn btn-primary">
-                            <i class="bi bi-save me-2"></i>Сохранить все настройки
-                        </button>
-                        <button type="button" class="btn btn-outline-warning" data-bs-toggle="modal" data-bs-target="#resetModal">
-                            <i class="bi bi-arrow-clockwise me-2"></i>Сбросить настройки
-                        </button>
-                        <a href="{{ url_for('main.settings_backup') }}" class="btn btn-outline-success">
-                            <i class="bi bi-hdd me-2"></i>Создать резервную копию
-                        </a>
-                    </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Название системы</label>
+                    <input type="text" class="form-control" value="Админ-панель Колледжа" readonly>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Версия</label>
+                    <input type="text" class="form-control" value="1.0" readonly>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label">Разработчик</label>
+                    <input type="text" class="form-control" value="Колледж Админ" readonly>
+                </div>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Для расширенных настроек обратитесь к системному администратору.
                 </div>
             </div>
         </div>
     </div>
-    
-    <!-- Основное содержимое -->
-    <div class="col-lg-9">
-        <form method="POST" action="{{ url_for('main.settings') }}" id="settings-form">
-            {{ form.hidden_tag() }}
-            
-            <!-- Основные настройки -->
-            <div class="settings-section" id="basic-settings">
-                <h5><i class="bi bi-building me-2"></i>Основные настройки</h5>
-                <div class="card mb-4">
-                    <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-12 mb-3">
-                                {{ form.college_name.label(class="form-label fw-medium") }}
-                                {{ form.college_name(class="form-control", placeholder="Введите название колледжа") }}
-                                <div class="form-text">Это название будет отображаться во всех отчетах и документах</div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                {{ form.academic_year.label(class="form-label fw-medium") }}
-                                {{ form.academic_year(class="form-control", placeholder="2024-2025") }}
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                {{ form.max_students_per_group.label(class="form-label fw-medium") }}
-                                {{ form.max_students_per_group(class="form-control") }}
-                                <div class="form-text">Максимальное количество студентов в одной группе</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Настройки отображения -->
-            <div class="settings-section" id="display-settings">
-                <h5><i class="bi bi-palette me-2"></i>Внешний вид</h5>
-                <div class="card mb-4">
-                    <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                {{ form.theme_color.label(class="form-label fw-medium") }}
-                                <div class="mb-2">
-                                    {% for value, label in form.theme_color.choices %}
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio" 
-                                               name="theme_color" id="theme_{{ value }}" 
-                                               value="{{ value }}" 
-                                               {% if form.theme_color.data == value %}checked{% endif %}>
-                                        <label class="form-check-label d-flex align-items-center" for="theme_{{ value }}">
-                                            <span class="theme-preview theme-{{ value }}"></span>
-                                            {{ label }}
-                                        </label>
-                                    </div>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                {{ form.items_per_page.label(class="form-label fw-medium") }}
-                                {{ form.items_per_page(class="form-control") }}
-                                <div class="form-text">Количество элементов на странице в таблицах</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Настройки экспорта -->
-            <div class="settings-section" id="export-settings">
-                <h5><i class="bi bi-download me-2"></i>Настройки экспорта</h5>
-                <div class="card mb-4">
-                    <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                {{ form.export_format.label(class="form-label fw-medium") }}
-                                {{ form.export_format(class="form-select") }}
-                                <div class="form-text">Формат файлов при экспорте данных</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Настройки уведомлений -->
-            <div class="settings-section" id="notification-settings">
-                <h5><i class="bi bi-bell me-2"></i>Уведомления</h5>
-                <div class="card mb-4">
-                    <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <div class="form-check form-switch">
-                                    {{ form.enable_system_notifications(class="form-check-input") }}
-                                    {{ form.enable_system_notifications.label(class="form-check-label fw-medium") }}
-                                    <div class="form-text">Показывать системные уведомления в интерфейсе</div>
-                                </div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <div class="form-check form-switch">
-                                    {{ form.enable_email_notifications(class="form-check-input") }}
-                                    {{ form.enable_email_notifications.label(class="form-check-label fw-medium") }}
-                                    <div class="form-text">Отправлять уведомления по email</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Настройки резервного копирования -->
-            <div class="settings-section" id="backup-settings">
-                <h5><i class="bi bi-hdd me-2"></i>Резервное копирование</h5>
-                <div class="card mb-4">
-                    <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <div class="form-check form-switch">
-                                    {{ form.auto_backup(class="form-check-input") }}
-                                    {{ form.auto_backup.label(class="form-check-label fw-medium") }}
-                                    <div class="form-text">Автоматически создавать резервные копии данных</div>
-                                </div>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                {{ form.backup_frequency.label(class="form-label fw-medium") }}
-                                {{ form.backup_frequency(class="form-select") }}
-                                <div class="form-text">Как часто создавать автоматические резервные копии</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Настройки безопасности -->
-            <div class="settings-section" id="password-settings">
-                <h5><i class="bi bi-key me-2"></i>Безопасность</h5>
-                <div class="card mb-4">
-                    <div class="card-body">
-                        <h6 class="mb-3">Смена пароля администратора</h6>
-                        <div class="row">
-                            <div class="col-md-12 mb-3">
-                                <small class="text-muted mb-2 d-block">Оставьте поля пустыми, если не хотите менять пароль</small>
-                            </div>
-                            <div class="col-md-12 mb-3">
-                                {{ form.current_password.label(class="form-label fw-medium") }}
-                                {{ form.current_password(class="form-control", placeholder="Введите текущий пароль") }}
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                {{ form.new_password.label(class="form-label fw-medium") }}
-                                {{ form.new_password(class="form-control", placeholder="Новый пароль (минимум 6 символов)") }}
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                {{ form.confirm_password.label(class="form-label fw-medium") }}
-                                {{ form.confirm_password(class="form-control", placeholder="Повторите новый пароль") }}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Кнопки действий -->
-            <div class="d-flex justify-content-between mt-4">
-                <div>
-                    <button type="submit" name="submit" class="btn btn-primary btn-lg">
-                        <i class="bi bi-save me-2"></i>Сохранить все настройки
-                    </button>
-                    <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-secondary btn-lg ms-2">
-                        <i class="bi bi-x-circle me-2"></i>Отмена
-                    </a>
-                </div>
-                <button type="button" class="btn btn-outline-warning" data-bs-toggle="modal" data-bs-target="#resetModal">
-                    <i class="bi bi-arrow-clockwise me-2"></i>Сбросить к настройкам по умолчанию
-                </button>
-            </div>
-        </form>
-    </div>
 </div>
-
-<!-- Модальное окно сброса настроек -->
-<div class="modal fade" id="resetModal" tabindex="-1" aria-labelledby="resetModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="resetModalLabel">Сброс настроек</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-warning">
-                    <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                    <strong>Внимание!</strong> Вы уверены, что хотите сбросить все настройки к значениям по умолчанию?
-                </div>
-                <p>Это действие:</p>
-                <ul>
-                    <li>Сбросит все пользовательские настройки</li>
-                    <li>Вернет настройки к заводским значениям</li>
-                    <li>Не затронет данные студентов, групп и оценок</li>
-                    <li>Необратимо для настроек (но вы можете их восстановить вручную)</li>
-                </ul>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
-                <form method="POST" action="{{ url_for('main.settings') }}">
-                    {{ form.hidden_tag() }}
-                    <button type="submit" name="reset" class="btn btn-warning">
-                        <i class="bi bi-arrow-clockwise me-2"></i>Сбросить настройки
-                    </button>
-                </form>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Плавная прокрутка к якорям в навигации
-    document.querySelectorAll('.settings-nav .nav-link').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const targetId = this.getAttribute('href');
-            if (targetId.startsWith('#')) {
-                const targetElement = document.querySelector(targetId);
-                if (targetElement) {
-                    window.scrollTo({
-                        top: targetElement.offsetTop - 20,
-                        behavior: 'smooth'
-                    });
-                    
-                    // Обновляем активный элемент в навигации
-                    document.querySelectorAll('.settings-nav .nav-link').forEach(navLink => {
-                        navLink.classList.remove('active');
-                    });
-                    this.classList.add('active');
-                }
-            } else {
-                window.location.href = this.getAttribute('href');
-            }
-        });
-    });
-    
-    // Обработка предпросмотра тем
-    document.querySelectorAll('.theme-preview').forEach(preview => {
-        preview.addEventListener('click', function() {
-            const themeValue = this.classList[1].replace('theme-', '');
-            document.querySelector(`#theme_${themeValue}`).checked = true;
-            
-            // Обновляем выделение
-            document.querySelectorAll('.theme-preview').forEach(p => {
-                p.classList.remove('selected');
-            });
-            this.classList.add('selected');
-        });
-    });
-    
-    // Обновляем выделение тем при загрузке
-    const currentTheme = document.querySelector('input[name="theme_color"]:checked');
-    if (currentTheme) {
-        const themeValue = currentTheme.value;
-        const preview = document.querySelector(`.theme-${themeValue}`);
-        if (preview) {
-            preview.classList.add('selected');
-        }
-    }
-    
-    // Валидация формы смены пароля
-    const newPassword = document.querySelector('#new_password');
-    const confirmPassword = document.querySelector('#confirm_password');
-    
-    if (newPassword && confirmPassword) {
-        function validatePasswords() {
-            if (newPassword.value !== confirmPassword.value) {
-                confirmPassword.setCustomValidity('Пароли не совпадают');
-            } else {
-                confirmPassword.setCustomValidity('');
-            }
-        }
-        
-        newPassword.addEventListener('input', validatePasswords);
-        confirmPassword.addEventListener('input', validatePasswords);
-    }
-    
-    // Отслеживание скролла для обновления навигации
-    window.addEventListener('scroll', function() {
-        const sections = document.querySelectorAll('.settings-section');
-        const navLinks = document.querySelectorAll('.settings-nav .nav-link[href^="#"]');
-        
-        let currentSection = '';
-        sections.forEach(section => {
-            const sectionTop = section.offsetTop;
-            const sectionHeight = section.clientHeight;
-            if (window.scrollY >= (sectionTop - 100)) {
-                currentSection = section.getAttribute('id');
-            }
-        });
-        
-        navLinks.forEach(link => {
-            link.classList.remove('active');
-            if (link.getAttribute('href') === `#${currentSection}`) {
-                link.classList.add('active');
-            }
-        });
-    });
-});
-</script>
 {% endblock %}

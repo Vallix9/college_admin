@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - {{ title }}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.subjects') }}">Предметы</a></li>
+<li class="breadcrumb-item active">{{ title }}</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi {% if subject %}bi-book{% else %}bi-book-plus{% endif %} me-2"></i>{{ title }}
+{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('main.subjects') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left"></i> Назад
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Данные предмета</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for(subject and 'main.edit_subject' or 'main.add_subject', id=subject.id if subject else None) }}">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="row g-3">
+                        <div class="col-md-12">
+                            <div class="mb-3">
+                                {{ form.name.label(class="form-label") }}
+                                {{ form.name(class="form-control", placeholder="Например: Математика, Физика, Программирование") }}
+                                {% if form.name.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.name.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                                <div class="form-text">Уникальное название учебного предмета</div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-12">
+                            <div class="mb-3">
+                                {{ form.hours.label(class="form-label") }}
+                                {{ form.hours(class="form-control", placeholder="72") }}
+                                {% if form.hours.errors %}
+                                    <div class="text-danger small mt-1">
+                                        {% for error in form.hours.errors %}
+                                            {{ error }}
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                                <div class="form-text">Общее количество учебных часов по предмету</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mt-4">
+                        <a href="{{ url_for('main.subjects') }}" class="btn btn-secondary">
+                            <i class="bi bi-x-circle"></i> Отмена
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-circle"></i> Сохранить
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        {% if subject %}
+        <div class="card mt-4">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0">Опасная зона</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">
+                    Удаление предмета возможно только если по нему нет оценок.
+                    {% if subject.grades %}
+                    <br><strong>По этому предмету есть {{ subject.grades|length }} оценок.</strong>
+                    {% endif %}
+                </p>
+                <form method="POST" action="{{ url_for('main.delete_subject', id=subject.id) }}" 
+                      onsubmit="return confirm('Вы уверены, что хотите удалить предмет \{{ subject.name }}\?{% if subject.grades %} Все оценки по этому предмету также будут удалены.{% endif %}');">
+                    <button type="submit" class="btn btn-danger" {% if subject.grades %}disabled{% endif %}>
+                        <i class="bi bi-trash"></i> Удалить предмет
+                    </button>
+                    {% if subject.grades %}
+                    <div class="mt-2 text-muted small">
+                        <i class="bi bi-info-circle"></i> Сначала удалите все оценки по этому предмету
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

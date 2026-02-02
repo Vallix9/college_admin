@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Предметы{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Предметы</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-book me-2"></i>Предметы
+{% endblock %}
+
+{% block header_actions %}
+<div class="d-flex">
+    <a href="{{ url_for('main.add_subject') }}" class="btn btn-primary me-2">
+        <i class="bi bi-plus-circle"></i> Добавить предмет
+    </a>
+    <button class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#quickAddSubjectModal">
+        <i class="bi bi-plus-lg"></i> Быстрое добавление
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Быстрое добавление предмета -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Быстрое добавление предмета</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('main.add_subject') }}">
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <input type="text" name="name" class="form-control" placeholder="Название предмета" required>
+                </div>
+                <div class="col-md-3">
+                    <input type="number" name="hours" class="form-control" placeholder="Часы" value="72" min="1" required>
+                </div>
+                <div class="col-md-1">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-plus"></i>
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Список учебных предметов</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Название</th>
+                        <th>Количество часов</th>
+                        <th>Дата создания</th>
+                        <th>Количество оценок</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for subject in subjects %}
+                    <tr>
+                        <td>
+                            <strong>{{ subject.name }}</strong>
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">{{ subject.hours }} часов</span>
+                        </td>
+                        <td>
+                            {{ subject.created_at.strftime('%d.%m.%Y') if subject.created_at else '—' }}
+                        </td>
+                        <td>
+                            <span class="badge {% if subject.grades|length > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
+                                {{ subject.grades|length }} оценок
+                            </span>
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm" role="group">
+                                <a href="{{ url_for('main.edit_subject', id=subject.id) }}" class="btn btn-outline-primary" title="Редактировать">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                <form method="POST" action="{{ url_for('main.delete_subject', id=subject.id) }}" style="display: inline;">
+                                    <button type="submit" class="btn btn-outline-danger" title="Удалить" 
+                                            onclick="return confirm('Удалить предмет \{{ subject.name }}\?')">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">
+                            <i class="bi bi-book display-5 d-block mb-2"></i>
+                            Нет ни одного предмета. Добавьте первый предмет.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно для быстрого добавления -->
+<div class="modal fade" id="quickAddSubjectModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Быстрое добавление предметов</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted mb-3">Введите названия предметов, каждый с новой строки:</p>
+                <form method="POST" action="{{ url_for('main.add_subject') }}" id="quickAddForm">
+                    <textarea name="subjects_text" class="form-control" rows="8" placeholder="Математика 144
+Физика 108
+Информатика 144
+История 72
+Английский язык 108
+..."></textarea>
+                    <small class="text-muted">Формат: "Название Часы" или просто "Название" (по умолчанию 72 часа)</small>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                <button type="submit" form="quickAddForm" class="btn btn-primary">Добавить предметы</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Обработка быстрого добавления предметов
+    const quickAddForm = document.getElementById('quickAddForm');
+    if (quickAddForm) {
+        quickAddForm.addEventListener('submit', function(e) {
+            const textarea = this.querySelector('textarea[name="subjects_text"]');
+            if (!textarea.value.trim()) {
+                e.preventDefault();
+                alert('Введите названия предметов');
+                return false;
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

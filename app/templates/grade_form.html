@@ -4,8 +4,14 @@
 
 {% block breadcrumb %}
 <li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
-<li class="breadcrumb-item"><a href="{{ url_for('main.grades') }}">Успеваемость</a></li>
-<li class="breadcrumb-item active">{{ title }}</li>
+{% if student_id %}
+    <li class="breadcrumb-item"><a href="{{ url_for('main.students') }}">Студенты</a></li>
+    <li class="breadcrumb-item"><a href="{{ url_for('main.view_student', student_id=student_id) }}">{{ student.full_name if student else 'Студент' }}</a></li>
+    <li class="breadcrumb-item active">{{ title }}</li>
+{% else %}
+    <li class="breadcrumb-item"><a href="{{ url_for('main.grades') }}">Успеваемость</a></li>
+    <li class="breadcrumb-item active">{{ title }}</li>
+{% endif %}
 {% endblock %}
 
 {% block page_title %}
@@ -13,9 +19,15 @@
 {% endblock %}
 
 {% block header_actions %}
-<a href="{{ url_for('main.grades') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-arrow-left"></i> Назад
-</a>
+{% if student_id %}
+    <a href="{{ url_for('main.view_student', student_id=student_id) }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Назад к студенту
+    </a>
+{% else %}
+    <a href="{{ url_for('main.grades') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Назад
+    </a>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -23,13 +35,24 @@
     <div class="col-lg-8 mx-auto">
         <div class="card">
             <div class="card-header">
-                <h5 class="mb-0">Добавление оценки</h5>
+                <h5 class="mb-0">
+                    {% if student_id %}
+                        Добавление оценки для {{ student.full_name }}
+                    {% else %}
+                        Добавление оценки
+                    {% endif %}
+                </h5>
             </div>
             <div class="card-body">
-                <form method="POST">
+                <form method="POST" action="{% if student_id %}{{ url_for('main.view_student', student_id=student_id) }}{% endif %}">
                     {{ form.hidden_tag() }}
                     
+                    {% if student_id %}
+                        <input type="hidden" name="add_grade" value="1">
+                    {% endif %}
+                    
                     <div class="row g-3">
+                        {% if not student_id %}
                         <div class="col-md-6">
                             <div class="mb-3">
                                 {{ form.student_id.label(class="form-label") }}
@@ -43,6 +66,15 @@
                                 {% endif %}
                             </div>
                         </div>
+                        {% else %}
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Студент</label>
+                                <input type="text" class="form-control" value="{{ student.full_name }}" readonly>
+                                <input type="hidden" name="student_id" value="{{ student_id }}">
+                            </div>
+                        </div>
+                        {% endif %}
                         
                         <div class="col-md-6">
                             <div class="mb-3">
@@ -54,6 +86,13 @@
                                             {{ error }}
                                         {% endfor %}
                                     </div>
+                                {% endif %}
+                                {% if not student_id %}
+                                <div class="form-text">
+                                    <a href="#" data-bs-toggle="modal" data-bs-target="#addSubjectModal">
+                                        <i class="bi bi-plus-circle"></i> Добавить новый предмет
+                                    </a>
+                                </div>
                                 {% endif %}
                             </div>
                         </div>
@@ -116,9 +155,15 @@
                     </div>
                     
                     <div class="d-flex justify-content-between mt-4">
+                        {% if student_id %}
+                        <a href="{{ url_for('main.view_student', student_id=student_id) }}" class="btn btn-secondary">
+                            <i class="bi bi-x-circle"></i> Отмена
+                        </a>
+                        {% else %}
                         <a href="{{ url_for('main.grades') }}" class="btn btn-secondary">
                             <i class="bi bi-x-circle"></i> Отмена
                         </a>
+                        {% endif %}
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-check-circle"></i> Сохранить оценку
                         </button>
@@ -152,6 +197,8 @@
                             <li><strong>Лабораторная</strong> - практическая работа</li>
                             <li><strong>Практика</strong> - учебная практика</li>
                             <li><strong>Тест</strong> - контрольное тестирование</li>
+                            <li><strong>Домашняя работа</strong> - самостоятельная работа</li>
+                            <li><strong>Лекция</strong> - работа на лекции</li>
                         </ul>
                     </div>
                 </div>
@@ -159,4 +206,127 @@
         </div>
     </div>
 </div>
+
+<!-- Модальное окно для добавления нового предмета -->
+<div class="modal fade" id="addSubjectModal" tabindex="-1" aria-labelledby="addSubjectModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addSubjectModalLabel">Добавить новый предмет</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('main.add_subject') }}">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Название предмета</label>
+                        <input type="text" name="name" class="form-control" placeholder="Например: Математика, Физика" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Количество часов</label>
+                        <input type="number" name="hours" class="form-control" value="72" min="1">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Добавить предмет</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if not student_id %}
+<style>
+    /* Стили для формы добавления оценки со страницы оценок */
+    .grade-form-section {
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border: 1px solid #dee2e6;
+    }
+    
+    .help-text {
+        font-size: 0.875rem;
+        color: #6c757d;
+        margin-top: 0.25rem;
+    }
+    
+    .form-select:focus, .form-control:focus {
+        border-color: #6f42c1;
+        box-shadow: 0 0 0 0.25rem rgba(111, 66, 193, 0.25);
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Автоматическое заполнение даты сегодняшним числом
+    const dateField = document.querySelector('input[name="date"]');
+    if (dateField && !dateField.value) {
+        const today = new Date().toISOString().split('T')[0];
+        dateField.value = today;
+    }
+    
+    // Динамическое обновление предметов при выборе студента
+    const studentSelect = document.querySelector('select[name="student_id"]');
+    const subjectSelect = document.querySelector('select[name="subject_id"]');
+    
+    if (studentSelect && subjectSelect) {
+        studentSelect.addEventListener('change', function() {
+            const studentId = this.value;
+            if (studentId) {
+                // Здесь можно добавить AJAX запрос для получения предметов студента
+                // Пока просто показываем все предметы
+            }
+        });
+    }
+    
+    // Валидация формы
+    const form = document.querySelector('form');
+    if (form) {
+        form.addEventListener('submit', function(e) {
+            const studentId = document.querySelector('select[name="student_id"]')?.value || 
+                             document.querySelector('input[name="student_id"]')?.value;
+            const subjectId = document.querySelector('select[name="subject_id"]')?.value;
+            const gradeValue = document.querySelector('select[name="grade_value"]')?.value;
+            const date = document.querySelector('input[name="date"]')?.value;
+            
+            let isValid = true;
+            let errorMessage = '';
+            
+            if (!studentId) {
+                isValid = false;
+                errorMessage = 'Выберите студента';
+            } else if (!subjectId) {
+                isValid = false;
+                errorMessage = 'Выберите предмет';
+            } else if (!gradeValue) {
+                isValid = false;
+                errorMessage = 'Выберите оценку';
+            } else if (!date) {
+                isValid = false;
+                errorMessage = 'Укажите дату';
+            }
+            
+            if (!isValid) {
+                e.preventDefault();
+                alert(errorMessage);
+                return false;
+            }
+        });
+    }
+    
+    // Обработка добавления нового предмета через модальное окно
+    const addSubjectForm = document.querySelector('#addSubjectModal form');
+    if (addSubjectForm) {
+        addSubjectForm.addEventListener('submit', function(e) {
+            const subjectName = this.querySelector('input[name="name"]').value;
+            if (!subjectName.trim()) {
+                e.preventDefault();
+                alert('Введите название предмета');
+                return false;
+            }
+        });
+    }
+});
+</script>
+{% endif %}
 {% endblock %}

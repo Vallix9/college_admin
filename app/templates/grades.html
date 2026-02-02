@@ -77,7 +77,9 @@
                     <tr>
                         <td>{{ grade.date.strftime('%d.%m.%Y') }}</td>
                         <td>
-                            <strong>{{ grade.student.last_name }} {{ grade.student.first_name[0] }}.</strong>
+                            <a href="{{ url_for('main.view_student', student_id=grade.student_id) }}" class="text-decoration-none">
+                                <strong>{{ grade.student.last_name }} {{ grade.student.first_name[0] }}.</strong>
+                            </a>
                         </td>
                         <td>
                             {% if grade.student.group %}
@@ -88,32 +90,58 @@
                         </td>
                         <td>{{ grade.subject.name }}</td>
                         <td>
-                            {% if grade.grade_value in ['5', '4', '3', '2'] %}
-                                {% if grade.grade_value == '5' %}
-                                <span class="badge bg-success">{{ grade.grade_value }}</span>
-                                {% elif grade.grade_value == '4' %}
-                                <span class="badge bg-primary">{{ grade.grade_value }}</span>
-                                {% elif grade.grade_value == '3' %}
-                                <span class="badge bg-warning">{{ grade.grade_value }}</span>
+                            <!-- ИСПРАВЛЕНО: Правильное отображение оценки -->
+                            {% if grade.grade_value|string in ['5', '4', '3', '2'] %}
+                                {% if grade.grade_value|string == '5' %}
+                                <span class="badge bg-success">5</span>
+                                {% elif grade.grade_value|string == '4' %}
+                                <span class="badge bg-primary">4</span>
+                                {% elif grade.grade_value|string == '3' %}
+                                <span class="badge bg-warning">3</span>
+                                {% elif grade.grade_value|string == '2' %}
+                                <span class="badge bg-danger">2</span>
                                 {% else %}
-                                <span class="badge bg-danger">{{ grade.grade_value }}</span>
+                                <span class="badge bg-secondary">{{ grade.grade_value }}</span>
                                 {% endif %}
                             {% else %}
-                                {% if grade.grade_value == 'зачет' %}
+                                {% if grade.grade_value|string == 'зачет' %}
                                 <span class="badge bg-success">Зачет</span>
-                                {% else %}
+                                {% elif grade.grade_value|string == 'незачет' %}
                                 <span class="badge bg-danger">Незачет</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ grade.grade_value }}</span>
                                 {% endif %}
                             {% endif %}
                         </td>
-                        <td>{{ grade.grade_type or '—' }}</td>
+                        <td>
+                            {% if grade.grade_type == 'exam' %}
+                            <span class="badge bg-primary">Экзамен</span>
+                            {% elif grade.grade_type == 'test' %}
+                            <span class="badge bg-info">Зачет</span>
+                            {% elif grade.grade_type == 'lab' %}
+                            <span class="badge bg-warning">Лабораторная</span>
+                            {% elif grade.grade_type == 'practice' %}
+                            <span class="badge bg-success">Практика</span>
+                            {% elif grade.grade_type == 'homework' %}
+                            <span class="badge bg-secondary">Домашняя</span>
+                            {% elif grade.grade_type == 'lecture' %}
+                            <span class="badge bg-dark">Лекция</span>
+                            {% else %}
+                            <span class="text-muted">{{ grade.grade_type or '—' }}</span>
+                            {% endif %}
+                        </td>
                         <td>{{ grade.comments or '—' }}</td>
                         <td>
-                            <form method="POST" action="{{ url_for('main.delete_grade', id=grade.id) }}" style="display: inline;">
-                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить" onclick="return confirm('Удалить эту оценку?')">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                            </form>
+                            <div class="btn-group btn-group-sm" role="group">
+                                <a href="{{ url_for('main.view_student', student_id=grade.student_id) }}" class="btn btn-outline-info" title="К студенту">
+                                    <i class="bi bi-person"></i>
+                                </a>
+                                <form method="POST" action="{{ url_for('main.delete_grade', id=grade.id) }}" style="display: inline;">
+                                    <button type="submit" class="btn btn-outline-danger" title="Удалить" onclick="return confirm('Удалить эту оценку?')">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                     {% else %}

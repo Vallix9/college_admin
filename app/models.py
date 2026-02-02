@@ -63,6 +63,23 @@ class SystemSettings(db.Model):
     
     def __repr__(self):
         return f'<SystemSettings {self.college_name}>'
+    
+    @classmethod
+    def reset_to_default(cls):
+        """Сброс настроек к значениям по умолчанию"""
+        settings = cls.get_settings()
+        settings.college_name = 'Технический колледж'
+        settings.academic_year = '2024-2025'
+        settings.max_students_per_group = 25
+        settings.export_format = 'excel'
+        settings.enable_email_notifications = False
+        settings.enable_system_notifications = True
+        settings.theme_color = 'purple'
+        settings.items_per_page = 20
+        settings.auto_backup = True
+        settings.backup_frequency = 'daily'
+        db.session.commit()
+        return settings
 
 @login_manager.user_loader
 def load_user(id):
@@ -154,7 +171,7 @@ class Grade(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
     subject_id = db.Column(db.Integer, db.ForeignKey('subject.id'), nullable=False)
-    grade_value = db.Column(db.Integer, nullable=False)
+    grade_value = db.Column(db.String(20), nullable=False)
     grade_type = db.Column(db.String(50))
     date = db.Column(db.Date, default=datetime.utcnow().date())
     comments = db.Column(db.Text)
@@ -162,12 +179,32 @@ class Grade(db.Model):
     
     def get_grade_color(self):
         """Возвращает класс Bootstrap для цвета оценки"""
-        if self.grade_value >= 4:
+        grade_str = str(self.grade_value)
+        if grade_str in ['5', 'зачет']:
             return 'bg-success'
-        elif self.grade_value == 3:
+        elif grade_str == '4':
+            return 'bg-primary'
+        elif grade_str == '3':
             return 'bg-warning'
         else:
             return 'bg-danger'
     
     def __repr__(self):
         return f'<Grade {self.grade_value} for student {self.student_id}>'
+    
+class StudentSubject(db.Model):
+    """Связь студента с предметами (для журнала успеваемости)"""
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
+    subject_id = db.Column(db.Integer, db.ForeignKey('subject.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Отношения
+    student = db.relationship('Student', backref='student_subjects', lazy=True)
+    subject = db.relationship('Subject', backref='subject_students', lazy=True)
+    
+    # Уникальность связи студент-предмет
+    __table_args__ = (db.UniqueConstraint('student_id', 'subject_id', name='_student_subject_uc'),)
+    
+    def __repr__(self):
+        return f'<StudentSubject {self.student_id}-{self.subject_id}>'
