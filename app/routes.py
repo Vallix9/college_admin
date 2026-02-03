@@ -1,25 +1,18 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file
+from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, session, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.urls import url_parse
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, func, desc
 import functools
+import traceback
+import os
+import json
+import secrets
 from app.init_ import db
 from app.models import User, Student, Group, Subject, Grade, SystemSettings
-from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm
-from app.utils import export_to_excel, format_date
-
-# Словарь перевода статусов
-STATUS_MAP = {
-    'active': 'Активный',
-    'expelled': 'Отчислен',
-    'graduated': 'Выпущен',
-    'suspended': 'Отстранён',
-    'transferred': 'Переведён',
-    'inactive': 'Неактивный',
-    'on_leave': 'В отпуске'
-}
+from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
+from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 
 main = Blueprint('main', __name__)
 
@@ -30,6 +23,12 @@ def flash_msg(type, message):
 
 def get_settings():
     return SystemSettings.get_settings()
+
+def safe_int(value, default=0):
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 def get_pagination_args():
     return {
@@ -61,6 +60,22 @@ def apply_filters(query, model):
         filters['status'] = status
     
     return query, filters
+
+# ===================== ДЕКОРАТОРЫ =====================
+def handle_db_exceptions(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except IntegrityError:
+            db.session.rollback()
+            flash_msg('error', 'Запись с такими данными уже существует')
+            return None
+        except Exception as e:
+            db.session.rollback()
+            flash_msg('error', f'Ошибка операции: {str(e)}')
+            return None
+    return wrapper
 
 # ===================== АУТЕНТИФИКАЦИЯ =====================
 @main.route('/')
@@ -207,8 +222,10 @@ def delete_student(id):
 def view_student(student_id):
     """Детальная страница студента с управлением оценками"""
     student = Student.query.get_or_404(student_id)
+    # Получаем все оценки студента
     grades = Grade.query.filter_by(student_id=student_id).order_by(Grade.date.desc()).all()
     
+    # Группируем оценки по предметам
     grades_by_subject = {}
     for grade in grades:
         subject_id = grade.subject_id
@@ -220,6 +237,7 @@ def view_student(student_id):
             }
         grades_by_subject[subject_id]['grades'].append(grade)
     
+    # Вычисляем средний балл по каждому предмету
     for subject_id, data in grades_by_subject.items():
         numeric_grades = []
         for grade in data['grades']:
@@ -238,12 +256,15 @@ def view_student(student_id):
         else:
             data['average'] = 0
     
+    # Все доступные предметы
     all_subjects = Subject.query.order_by(Subject.name).all()
     
+    # Создаем формы для шаблона
     grade_form = GradeForm()
     grade_form.subject_id.choices = [(s.id, s.name) for s in all_subjects]
     subject_form = SubjectForm()
     
+    # Текущая дата для шаблона
     today = date.today()
     
     return render_template('student_detail.html',
@@ -254,13 +275,14 @@ def view_student(student_id):
                          subject_form=subject_form,
                          today=today)
 
-# ===================== ДОБАВЛЕНИЕ ОЦЕНКИ СТУДЕНТУ =====================
+# ===================== ДОБАВЛЕНИЕ И УДАЛЕНИЕ ОЦЕНОК СТУДЕНТА =====================
 @main.route('/students/<int:student_id>/grades/add', methods=['POST'])
 @login_required
 def add_grade_to_student(student_id):
     """Добавление оценки конкретному студенту со страницы студента"""
     student = Student.query.get_or_404(student_id)
     
+    # Получаем данные из формы
     subject_id = request.form.get('subject_id')
     grade_value = request.form.get('grade_value')
     grade_type = request.form.get('grade_type', 'exam')
@@ -271,11 +293,13 @@ def add_grade_to_student(student_id):
         return redirect(url_for('main.view_student', student_id=student_id))
     
     try:
+        # Проверяем, существует ли предмет
         subject = Subject.query.get(subject_id)
         if not subject:
             flash_msg('error', 'Выбранный предмет не найден')
             return redirect(url_for('main.view_student', student_id=student_id))
         
+        # Создаем новую оценку
         grade = Grade(
             student_id=student_id,
             subject_id=subject_id,
@@ -295,10 +319,11 @@ def add_grade_to_student(student_id):
 
 @main.route('/students/<int:student_id>/grades/<int:grade_id>/delete', methods=['POST'])
 @login_required
-def delete_grade_from_student(student_id, grade_id):
-    """Удаление оценки студента со страницы студента"""
+def delete_student_grade(student_id, grade_id):
+    """Удаление оценки студента (основной эндпоинт для шаблона)"""
     try:
         grade = Grade.query.get_or_404(grade_id)
+        # Проверяем, что оценка принадлежит студенту
         if grade.student_id != student_id:
             flash_msg('error', 'Оценка не принадлежит данному студенту')
             return redirect(url_for('main.view_student', student_id=student_id))
@@ -311,6 +336,13 @@ def delete_grade_from_student(student_id, grade_id):
         flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
     
     return redirect(url_for('main.view_student', student_id=student_id))
+
+# Альтернативное имя для совместимости
+@main.route('/students/<int:student_id>/grades/<int:grade_id>/remove', methods=['POST'])
+@login_required
+def delete_grade_from_student(student_id, grade_id):
+    """Альтернативный эндпоинт для удаления оценки"""
+    return delete_student_grade(student_id, grade_id)
 
 # ===================== ГРУППЫ =====================
 @main.route('/groups')
@@ -379,13 +411,16 @@ def delete_group(id):
 @main.route('/subjects')
 @login_required
 def subjects():
+    """Список всех предметов"""
     subjects_list = Subject.query.order_by(Subject.name).all()
     return render_template('subjects.html', subjects=subjects_list)
 
 @main.route('/subjects/add', methods=['GET', 'POST'])
 @login_required
 def add_subject():
+    """Добавление нового предмета (ОДНА ФУНКЦИЯ - НЕТ ДУБЛИРОВАНИЯ)"""
     if request.method == 'POST':
+        # Обработка быстрого добавления из текстового поля
         subjects_text = request.form.get('subjects_text')
         if subjects_text:
             lines = subjects_text.strip().split('\n')
@@ -393,6 +428,7 @@ def add_subject():
             for line in lines:
                 line = line.strip()
                 if line:
+                    # Парсим строку: "Название Часы" или просто "Название"
                     parts = line.split()
                     if len(parts) >= 2 and parts[-1].isdigit():
                         name = ' '.join(parts[:-1])
@@ -401,6 +437,7 @@ def add_subject():
                         name = line
                         hours = 72
                     
+                    # Проверяем, существует ли уже предмет
                     existing = Subject.query.filter_by(name=name).first()
                     if not existing:
                         try:
@@ -418,6 +455,7 @@ def add_subject():
             
             return redirect(url_for('main.subjects'))
         else:
+            # Обработка обычной формы
             name = request.form.get('name')
             hours = request.form.get('hours', 72, type=int)
             
@@ -426,7 +464,10 @@ def add_subject():
                 return redirect(url_for('main.subjects'))
             
             try:
-                subject = Subject(name=name, hours=hours)
+                subject = Subject(
+                    name=name,
+                    hours=hours
+                )
                 db.session.add(subject)
                 db.session.commit()
                 flash_msg('success', f'Предмет "{subject.name}" успешно добавлен')
@@ -438,12 +479,14 @@ def add_subject():
                 db.session.rollback()
                 flash_msg('error', f'Ошибка добавления предмета: {str(e)}')
     
+    # GET запрос - показываем форму
     form = SubjectForm()
     return render_template('subject_form.html', form=form, title='Добавить предмет')
 
 @main.route('/subjects/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_subject(id):
+    """Редактирование предмета"""
     subject = Subject.query.get_or_404(id)
     form = SubjectForm(obj=subject)
     if form.validate_on_submit():
@@ -464,8 +507,10 @@ def edit_subject(id):
 @main.route('/subjects/<int:id>/delete', methods=['POST'])
 @login_required
 def delete_subject(id):
+    """Удаление предмета"""
     subject = Subject.query.get_or_404(id)
     try:
+        # Проверяем, есть ли оценки по этому предмету
         grade_count = Grade.query.filter_by(subject_id=id).count()
         if grade_count > 0:
             flash_msg('error', f'Нельзя удалить предмет "{subject.name}", так как по нему уже есть {grade_count} оценок')
@@ -483,22 +528,29 @@ def delete_subject(id):
 @main.route('/grades')
 @login_required
 def grades():
+    """Список всех оценок"""
+    # Получаем параметры фильтрации
     group_id = request.args.get('group', type=int)
     student_id = request.args.get('student', type=int)
+    # Создаем базовый запрос
     query = Grade.query.join(Student).join(Subject)
     
+    # Применяем фильтры
     if group_id:
         query = query.filter(Student.group_id == group_id)
     if student_id:
         query = query.filter(Grade.student_id == student_id)
     
+    # Пагинация
     page_args = get_pagination_args()
     grades_paginated = query.order_by(desc(Grade.date)).paginate(
         page=page_args['page'], per_page=page_args['per_page'], error_out=False)
     
+    # Получаем данные для фильтров
     groups = Group.query.all()
     students = Student.query.order_by(Student.last_name).all()
     
+    # Подготавливаем фильтры для отображения
     current_filters = {}
     if group_id:
         current_filters['group'] = group_id
@@ -514,9 +566,11 @@ def grades():
 @main.route('/grades/add', methods=['GET', 'POST'])
 @login_required
 def add_grade():
+    """Добавление новой оценки"""
     form = GradeForm()
     if form.validate_on_submit():
         try:
+            # Проверяем, существует ли студент и предмет
             student = Student.query.get(form.student_id.data)
             subject = Subject.query.get(form.subject_id.data)
             
@@ -549,6 +603,7 @@ def add_grade():
 @main.route('/grades/<int:id>/delete', methods=['POST'])
 @login_required
 def delete_grade(id):
+    """Удаление оценки"""
     grade = Grade.query.get_or_404(id)
     try:
         db.session.delete(grade)
@@ -585,7 +640,7 @@ def generate_report():
                 'Дата рождения': format_date(s.birth_date),
                 'Email': s.email or '',
                 'Телефон': s.phone or '',
-                'Статус': STATUS_MAP.get(s.status, s.status)  # ← перевод на русский
+                'Статус': s.status
             } for s in query.all()]
             
             filepath = export_to_excel(data, 'students_report')
@@ -626,6 +681,7 @@ def generate_report():
 @main.route('/reports/students')
 @login_required
 def report_students():
+    """Экспорт всех студентов"""
     try:
         students = Student.query.all()
         data = []
@@ -637,7 +693,7 @@ def report_students():
                 'Дата рождения': format_date(student.birth_date),
                 'Email': student.email or '',
                 'Телефон': student.phone or '',
-                'Статус': STATUS_MAP.get(student.status, student.status)  # ← перевод на русский
+                'Статус': student.status
             })
         filepath = export_to_excel(data, 'students_report')
         return send_file(filepath, as_attachment=True)
@@ -648,6 +704,7 @@ def report_students():
 @main.route('/reports/group/<int:group_id>')
 @login_required
 def report_group(group_id):
+    """Экспорт студентов группы"""
     try:
         group = Group.query.get_or_404(group_id)
         students = Student.query.filter_by(group_id=group_id).all()
@@ -660,7 +717,7 @@ def report_group(group_id):
                 'Дата рождения': format_date(student.birth_date),
                 'Email': student.email or '',
                 'Телефон': student.phone or '',
-                'Статус': STATUS_MAP.get(student.status, student.status)  # ← перевод на русский
+                'Статус': student.status
             })
         
         filepath = export_to_excel(data, f'group_{group.name}_report')
@@ -673,6 +730,7 @@ def report_group(group_id):
 @main.route('/settings')
 @login_required
 def settings():
+    """Простая страница с базовыми настройками"""
     return render_template('settings.html')
 
 # ===================== API =====================
