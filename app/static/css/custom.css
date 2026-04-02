@@ -27,7 +27,7 @@ body {
 
 .sidebar-header {
     border-bottom: 1px solid var(--border-color);
-    background: linear-gradient(135deg, #6f42c1 0%, #9b6bff 100%);
+    /*background: linear-gradient(135deg, #6f42c1 0%, #9b6bff 100%);*/
     color: white;
 }
 
