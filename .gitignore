@@ -44,7 +44,20 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Docker
 *.db-data/
 data/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.secret
+
+# Runtime data
+uploads/
+exports/
+backups/
+_backup/

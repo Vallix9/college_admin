@@ -1,0 +1,18 @@
+* text=auto
+
+*.py    text diff=python
+*.html  text
+*.css   text
+*.js    text
+*.md    text
+*.txt   text
+*.yml   text
+*.json  text
+Dockerfile text
+.gitignore text
+
+*.png binary
+*.jpg binary
+*.xlsx binary
+*.backup binary
+*.db binary
