@@ -168,7 +168,7 @@
                                                         data-bs-target="#restoreModal{{ loop.index }}">
                                                     <i class="bi bi-arrow-clockwise"></i> Восстановить
                                                 </button>
-                                                <a href="{{ url_for('static', filename='backups/' + backup.filename) }}" 
+                                                <a href="{{ url_for('main.download_backup_file', filename=backup.filename) }}" 
                                                    class="btn btn-outline-success" 
                                                    download>
                                                     <i class="bi bi-download"></i> Скачать

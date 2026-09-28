@@ -1,15 +1,23 @@
-version: '3.8'
-
 services:
   web:
     build: .
     ports:
       - "5000:5000"
     environment:
-      - FLASK_APP=run.py
-      - FLASK_ENV=development
-      - DATABASE_URL=sqlite:////app/college.db
-      - SECRET_KEY=your-secret-key-change-in-production
+      FLASK_APP: run.py
+      FLASK_DEBUG: "0"
+      WAITRESS: "1"
+      HOST: 0.0.0.0
+      PORT: "5000"
+      DATABASE_URL: sqlite:////app/data/college.db
+      # Задайте свой SECRET_KEY. В .env используется подстановка.
+      SECRET_KEY: ${SECRET_KEY:?задайте SECRET_KEY в .env или переменной окружения}
     volumes:
-      - ./data:/app/data
+      - college_data:/app/data
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+      - ./exports:/app/exports
     restart: unless-stopped
+
+volumes:
+  college_data:

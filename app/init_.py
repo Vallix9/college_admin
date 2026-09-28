@@ -3,15 +3,29 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 import os
 import re
+import importlib
 from datetime import datetime
 
 db = SQLAlchemy()
 login_manager = LoginManager()
 
+def resolve_config(config_class):
+    """Превращает 'config.Config' в сам класс Config."""
+    module_name, _, class_name = config_class.rpartition('.')
+    if not module_name:
+        return config_class
+    return getattr(importlib.import_module(module_name), class_name)
+
 def create_app(config_class='config.Config'):
     app = Flask(__name__)
     app.config.from_object(config_class)
-    
+
+    # Создаём каталоги uploads/, backups/, exports/, logs/ — без этого
+    # экспорт отчётов и резервное копирование падают с FileNotFoundError
+    config_cls = resolve_config(config_class)
+    if hasattr(config_cls, 'init_app'):
+        config_cls.init_app(app)
+
     db.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = 'main.login'

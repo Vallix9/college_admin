@@ -107,6 +107,31 @@
                         <!-- Разделитель -->
                         <hr class="my-4">
                         
+                        <!-- Обслуживание системы -->
+                        <ul class="nav flex-column">
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('main.settings') }}">
+                                    <i class="bi bi-gear me-2"></i>
+                                    <span>Настройки</span>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('main.settings_backup') }}">
+                                    <i class="bi bi-hdd me-2"></i>
+                                    <span>Резервные копии</span>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('main.settings_import') }}">
+                                    <i class="bi bi-file-earmark-arrow-up me-2"></i>
+                                    <span>Импорт данных</span>
+                                </a>
+                            </li>
+                        </ul>
+                        
+                        <!-- Разделитель -->
+                        <hr class="my-4">
+                        
                         <!-- Дополнительные ссылки -->
                         <ul class="nav flex-column">
                             <li class="nav-item">

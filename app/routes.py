@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, session, jsonify
 from flask_login import login_user, logout_user, login_required, current_user
-from werkzeug.urls import url_parse
+from urllib.parse import urlparse
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date
 from sqlalchemy import or_, func, desc
@@ -13,6 +13,7 @@ from app.init_ import db
 from app.models import User, Student, Group, Subject, Grade, SystemSettings
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
+from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
 
 main = Blueprint('main', __name__)
 
@@ -29,6 +30,20 @@ def safe_int(value, default=0):
         return int(value)
     except (ValueError, TypeError):
         return default
+
+def is_safe_redirect(target):
+    """Проверяет, что цель редиректа ведёт внутри приложения.
+
+    Отклоняем абсолютные URL, протокол-относительные ('//host', '/\\host') и
+    любые цели без ведущего слэша — иначе получаем open redirect.
+    """
+    if not target:
+        return False
+    if not target.startswith('/'):
+        return False
+    if target.startswith('//') or target.startswith('/\\'):
+        return False
+    return urlparse(target).netloc == '' and not urlparse(target).scheme
 
 def get_pagination_args():
     return {
@@ -116,7 +131,7 @@ def login():
             login_user(user, remember=form.remember_me.data)
             next_page = request.args.get('next')
             
-            if not next_page or url_parse(next_page).netloc != '':
+            if not is_safe_redirect(next_page):
                 next_page = url_for('main.dashboard')
             
             flash_msg('success', f'Добро пожаловать, {user.username}!')
@@ -733,7 +748,94 @@ def settings():
     """Простая страница с базовыми настройками"""
     return render_template('settings.html')
 
+# ===================== РЕЗЕРВНОЕ КОПИРОВАНИЕ =====================
+@main.route('/settings/backup', methods=['GET', 'POST'])
+@login_required
+def settings_backup():
+    """Страница управления резервными копиями"""
+    form = BackupForm()
+    backups = list_backups()
+
+    if form.validate_on_submit():
+        try:
+            filename = create_backup(
+                backup_type=form.backup_type.data,
+                include_files=form.include_files.data,
+                description=form.description.data or ''
+            )
+            flash_msg('success', f'Резервная копия «{filename}» создана')
+            return redirect(url_for('main.settings_backup'))
+        except Exception as e:
+            flash_msg('error', f'Ошибка создания резервной копии: {str(e)}')
+            return redirect(url_for('main.settings_backup'))
+
+    return render_template('settings_backup.html', form=form, backups=backups)
+
+@main.route('/settings/backup/<filename>/download')
+@login_required
+def download_backup_file(filename):
+    """Скачивание резервной копии"""
+    path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
+    if not os.path.isfile(path):
+        flash_msg('error', 'Файл резервной копии не найден')
+        return redirect(url_for('main.settings_backup'))
+    return send_file(path, as_attachment=True)
+
+@main.route('/settings/backup/<filename>/restore', methods=['POST'])
+@login_required
+def restore_backup_file(filename):
+    """Восстановление базы данных из резервной копии"""
+    path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
+    if not os.path.isfile(path):
+        flash_msg('error', 'Файл резервной копии не найден')
+        return redirect(url_for('main.settings_backup'))
+
+    try:
+        restore_backup(path)
+        flash_msg('success', 'Данные восстановлены из резервной копии')
+    except Exception as e:
+        flash_msg('error', f'Ошибка восстановления: {str(e)}')
+
+    return redirect(url_for('main.settings_backup'))
+
+@main.route('/settings/backup/<filename>/delete', methods=['POST'])
+@login_required
+def delete_backup_file(filename):
+    """Удаление файла резервной копии"""
+    if delete_backup(filename):
+        flash_msg('success', 'Резервная копия удалена')
+    else:
+        flash_msg('error', 'Не удалось удалить резервную копию')
+    return redirect(url_for('main.settings_backup'))
+
+# ===================== ИМПОРТ ДАННЫХ =====================
+@main.route('/settings/import', methods=['GET', 'POST'])
+@login_required
+def settings_import():
+    """Страница импорта данных из Excel/CSV"""
+    form = ImportForm()
+    result = None
+
+    if form.validate_on_submit():
+        file = form.file.data
+        if file and file.filename:
+            try:
+                result = import_from_file(
+                    file,
+                    import_type=form.import_type.data,
+                    import_mode=form.import_mode.data
+                )
+                flash_msg('success', result['message'])
+            except Exception as e:
+                flash_msg('error', f'Ошибка импорта: {str(e)}')
+                db.session.rollback()
+                return redirect(url_for('main.settings_import'))
+        else:
+            flash_msg('error', 'Выберите файл для импорта')
+
+    return render_template('settings_import.html', form=form, result=result)
+
 # ===================== API =====================
 @main.route('/health')
 def health_check():
-    return {'status': 'ok', 'timestamp': datetime.utcnow().isoformat()}         
+    return {'status': 'ok', 'timestamp': datetime.now().isoformat()}
