@@ -3,9 +3,15 @@
 Запуск:  python smoke_test.py
 Ищет ошибки рендеринга (в том числе url_for на несуществующие эндпоинты)
 и проверяет ответы health-эндпоинта.
+
+Важно: страница входа тоже отдаёт HTTP 200, поэтому одного кода ответа
+недостаточно. Тест отдельно убеждается, что вход состоялся, и что
+защищённая страница не перенаправила обратно на /login — иначе все
+проверки проходили бы, не проверив ничего.
 """
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +37,18 @@ with app.app_context():
     grade_id = Grade.query.first().id if Grade.query.first() else 1
     admin_pw = os.environ.get('ADMIN_PASSWORD', 'admin123')
     admin_name = os.environ.get('ADMIN_USERNAME', 'admin')
+
+CSRF_RE = re.compile(r'name="csrf_token"[^>]*value="([^"]+)"')
+LOGIN_MARK = 'name="password"'
+
+
+def is_login_page(body):
+    return LOGIN_MARK in body and 'csrf_token' in body
+
+
+def extract_csrf(html):
+    match = CSRF_RE.search(html)
+    return match.group(1) if match else None
 
 PAGES = [
     ('/', 'дашборд'),
@@ -63,17 +81,36 @@ def main():
         with app.app_context():
             admin = User.query.filter_by(username=admin_name).first()
 
-        # Вход в систему
+        # Вход в систему: сначала получаем csrf_token со страницы входа
+        login_page = client.get('/login')
+        token = extract_csrf(login_page.get_data(as_text=True))
+        if not token:
+            print('✗ Не удалось получить csrf_token со страницы входа')
+            return 1
+
         response = client.post('/login', data={
             'username': admin_name,
             'password': admin_pw,
+            'csrf_token': token,
         }, follow_redirects=True)
+        body = response.get_data(as_text=True)
+
         if response.status_code != 200:
             failures.append(('ВХОД', response.status_code))
             print('✗ Не удалось войти в систему')
             return finish(failures)
+        if is_login_page(body):
+            print('✗ Вход не состоялся: сервер вернул форму входа (проверьте пароль ADMIN_PASSWORD)')
+            return 1
 
-        print('✓ Вход выполнен\n')
+        # Контрольная проверка: защищённая страница не должна перенаправлять на /login
+        probe = client.get('/students', follow_redirects=False)
+        if probe.status_code in (301, 302):
+            failures.append(('АВТОРИЗАЦИЯ', f'/students → {probe.headers.get("Location")}'))
+            print('✗ Сессия не закрепилась: защищённая страница перенаправляет на вход')
+            return finish(failures)
+
+        print('✓ Вход выполнен, сессия активна\n')
 
         for url, title in PAGES:
             try:
@@ -84,18 +121,28 @@ def main():
                 continue
 
             status = resp.status_code
-            body = resp.get_data(as_text=True)
+            content_type = resp.headers.get('Content-Type', '')
+
+            # Выгрузки (xlsx) — это zip-архив, его нельзя декодировать
+            # как текст. Такие ответы проверяем только по коду.
+            is_binary = not content_type.startswith('text/')
+            body = '' if is_binary else resp.get_data(as_text=True)
 
             # Страница отрендерилась, но внутри — ошибка Jinja
             if status != 200:
                 failures.append((url, status))
                 print(f'✗ {url:42} {title:32} HTTP {status}')
+            elif is_binary:
+                print(f'✓ {url:42} {title:32} {status} (файл, {len(resp.get_data())} байт)')
             elif 'BuildError' in body or 'jinja2.exceptions' in body:
                 failures.append((url, 'BuildError в теле ответа'))
                 print(f'✗ {url:42} {title:32} BuildError')
             elif 'Internal Server Error' in body:
                 failures.append((url, '500 внутри'))
                 print(f'✗ {url:42} {title:32} внутренняя ошибка')
+            elif is_login_page(body):
+                failures.append((url, 'редирект на страницу входа'))
+                print(f'✗ {url:42} {title:32} открывает форму входа вместо страницы')
             else:
                 print(f'✓ {url:42} {title:32} {status}')
 
@@ -109,7 +156,7 @@ def finish(failures):
         for url, err in failures:
             print(f'   - {url}: {err}')
         return 1
-    print(f'✅ Все {len(PAGES)} страниц открылись без ошибок')
+    print(f'✅ Все {len(PAGES)} страниц открылись без ошибок (вход подтверждён)')
     return 0
 
 

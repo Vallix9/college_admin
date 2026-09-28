@@ -1,16 +1,149 @@
 # app/utils.py
-import pandas as pd
-from datetime import datetime
+import logging
 import os
 import re
+import sys
 import json
 import shutil
 import zipfile
+from logging.handlers import RotatingFileHandler
+
+import pandas as pd
+from datetime import datetime
 
 BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 BACKUP_DIR = os.path.join(BASEDIR, 'backups')
 EXPORT_DIR = os.path.join(BASEDIR, 'exports')
+LOG_DIR = os.path.join(BASEDIR, 'logs')
 DB_PATH = os.path.join(BASEDIR, 'college.db')
+
+LOGGER_NAME = 'college'
+LOG_FILENAME = 'app.log'
+
+
+def setup_logging(log_dir=None, level=logging.INFO, max_bytes=2 * 1024 * 1024, backup_count=5):
+    """Настраивает логирование в logs/app.log и в консоль.
+
+    Хендлеры вешаются на именованный логгер, а не на root: иначе туда же
+    попадут сообщения werkzeug в его собственном формате, и парсер
+    в шаблоне журнала не сможет вытащить метку времени.
+    """
+    log_dir = log_dir or LOG_DIR
+    os.makedirs(log_dir, exist_ok=True)
+
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(level)
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except (ValueError, OSError):
+            pass
+
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S')
+
+    file_handler = RotatingFileHandler(
+        os.path.join(log_dir, LOG_FILENAME),
+        maxBytes=max_bytes, backupCount=backup_count, encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(level)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(level)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def get_logger(name=None):
+    return logging.getLogger(name or LOGGER_NAME)
+
+
+def get_log_file_path():
+    return os.path.join(LOG_DIR, LOG_FILENAME)
+
+
+def read_log_lines(limit=1000, level=None, search=None):
+    """Читает последние строки журнала. Новые сверху."""
+    path = get_log_file_path()
+    if not os.path.isfile(path):
+        return []
+
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            lines = [line.rstrip('\n') for line in f if line.strip()]
+    except OSError:
+        return []
+
+    if level:
+        needle = f'[{level}]'
+        lines = [line for line in lines if needle in line]
+    if search:
+        needle = search.lower()
+        lines = [line for line in lines if needle in line.lower()]
+
+    lines.reverse()
+    return lines[:limit] if limit else lines
+
+
+def count_logs_by_level(level):
+    """Сколько записей уровня level в журнале. Используется в шаблоне
+    view_logs.html, который зовёт функцию без аргументов."""
+    return sum(1 for line in read_log_lines(limit=0) if f'[{level}]' in line)
+
+
+def get_log_file_size():
+    """Размер журнала в КБ."""
+    path = get_log_file_path()
+    if not os.path.isfile(path):
+        return 0
+    return round(os.path.getsize(path) / 1024, 2)
+
+
+def get_log_file_mtime():
+    """Когда журнал последний раз изменялся."""
+    path = get_log_file_path()
+    if not os.path.isfile(path):
+        return 'Неизвестно'
+    return datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M:%S')
+
+
+TIMESTAMP_RE = re.compile(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
+MESSAGE_RE = re.compile(
+    r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},?\d*\s*\[(INFO|WARNING|ERROR|DEBUG|CRITICAL)\]\s*')
+
+
+def get_log_level(log_text):
+    """Уровень записи журнала."""
+    if not log_text:
+        return 'INFO'
+    if 'CRITICAL' in log_text:
+        return 'CRITICAL'
+    if 'ERROR' in log_text:
+        return 'ERROR'
+    if 'WARNING' in log_text:
+        return 'WARNING'
+    if 'DEBUG' in log_text:
+        return 'DEBUG'
+    return 'INFO'
+
+
+def extract_timestamp(log_text):
+    """Метка времени из строки журнала."""
+    match = TIMESTAMP_RE.search(log_text or '')
+    return match.group() if match else 'Неизвестно'
+
+
+def extract_message(log_text):
+    """Текст сообщения без метки времени и уровня."""
+    return MESSAGE_RE.sub('', log_text or '').strip()
 
 
 def get_db_path():
@@ -123,6 +256,7 @@ def list_backups():
             'description': description,
             'date': created,
             'size_mb': size_mb,
+            'size': os.path.getsize(full_path),
             'path': full_path,
         })
 

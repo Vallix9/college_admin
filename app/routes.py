@@ -14,6 +14,9 @@ from app.models import User, Student, Group, Subject, Grade, SystemSettings
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
+from app.utils import get_logger
+
+log = get_logger()
 
 main = Blueprint('main', __name__)
 
@@ -134,9 +137,15 @@ def login():
             if not is_safe_redirect(next_page):
                 next_page = url_for('main.dashboard')
             
+            user.last_login_at = datetime.now()
+            db.session.commit()
+            log.info('Вход выполнен: %s (роль: %s) с %s',
+                     user.username, user.role, request.remote_addr)
             flash_msg('success', f'Добро пожаловать, {user.username}!')
             return redirect(next_page)
         
+        log.warning('Неудачная попытка входа: логин «%s» с %s',
+                    form.username.data, request.remote_addr)
         flash_msg('error', 'Неверное имя пользователя или пароль')
     
     return render_template('login.html', form=form)
@@ -144,6 +153,7 @@ def login():
 @main.route('/logout')
 @login_required
 def logout():
+    log.info('Выход: %s', current_user.username)
     logout_user()
     flash_msg('success', 'Вы успешно вышли из системы')
     return redirect(url_for('main.login'))
@@ -185,13 +195,18 @@ def add_student():
             )
             db.session.add(student)
             db.session.commit()
+            log.info('Добавлен студент: %s (группа: %s, статус: %s) — %s',
+                     student.full_name, student.group.name if student.group else '—',
+                     student.status, current_user.username)
             flash_msg('success', f'Студент {student.full_name} успешно добавлен')
             return redirect(url_for('main.students'))
         except IntegrityError:
             db.session.rollback()
+            log.error('Дубликат при добавлении студента: %s', form.student_id.data)
             flash_msg('error', 'Запись с такими данными уже существует')
         except Exception as e:
             db.session.rollback()
+            log.exception('Ошибка добавления студента: %s', e)
             flash_msg('error', f'Ошибка добавления студента: {str(e)}')
     
     return render_template('student_form.html', form=form, title='Добавить студента', student=None)
@@ -207,13 +222,16 @@ def edit_student(id):
             form.populate_obj(student)
             student.group_id = form.group_id.data if form.group_id.data != 0 else None
             db.session.commit()
+            log.info('Изменён студент: %s — %s', student.student_id, current_user.username)
             flash_msg('success', f'Данные студента {student.full_name} обновлены')
             return redirect(url_for('main.students'))
         except IntegrityError:
             db.session.rollback()
+            log.error('Дубликат при изменении студента: %s', form.student_id.data)
             flash_msg('error', 'Запись с такими данными уже существует')
         except Exception as e:
             db.session.rollback()
+            log.exception('Ошибка изменения студента: %s', e)
             flash_msg('error', f'Ошибка обновления студента: {str(e)}')
     
     return render_template('student_form.html', form=form, title='Редактировать студента', student=student)
@@ -222,12 +240,15 @@ def edit_student(id):
 @login_required
 def delete_student(id):
     student = Student.query.get_or_404(id)
+    full_name = student.full_name
     try:
         db.session.delete(student)
         db.session.commit()
-        flash_msg('success', f'Студент {student.full_name} удален')
+        log.warning('Удалён студент: %s — %s', full_name, current_user.username)
+        flash_msg('success', f'Студент {full_name} удален')
     except Exception as e:
         db.session.rollback()
+        log.exception('Ошибка удаления студента %s: %s', full_name, e)
         flash_msg('error', f'Ошибка удаления студента: {str(e)}')
     return redirect(url_for('main.students'))
 
@@ -325,9 +346,13 @@ def add_grade_to_student(student_id):
         )
         db.session.add(grade)
         db.session.commit()
+        log.info('Оценка добавлена: студент %s, предмет «%s», значение %s (%s) — %s',
+                 student.full_name, subject.name, grade_value, grade_type,
+                 current_user.username)
         flash_msg('success', f'Оценка по предмету "{subject.name}" успешно добавлена')
     except Exception as e:
         db.session.rollback()
+        log.exception('Ошибка добавления оценки студенту %s: %s', student_id, e)
         flash_msg('error', f'Ошибка добавления оценки: {str(e)}')
     
     return redirect(url_for('main.view_student', student_id=student_id))
@@ -341,13 +366,18 @@ def delete_student_grade(student_id, grade_id):
         # Проверяем, что оценка принадлежит студенту
         if grade.student_id != student_id:
             flash_msg('error', 'Оценка не принадлежит данному студенту')
+            log.warning('Отклонено удаление чужой оценки: оценка %d, студент %d — %s',
+                        grade_id, student_id, current_user.username)
             return redirect(url_for('main.view_student', student_id=student_id))
         
+        info = 'предмет %s, значение %s' % (grade.subject.name, grade.grade_value)
         db.session.delete(grade)
         db.session.commit()
+        log.warning('Оценка удалена: %s — %s', info, current_user.username)
         flash_msg('success', 'Оценка удалена')
     except Exception as e:
         db.session.rollback()
+        log.exception('Ошибка удаления оценки %d: %s', grade_id, e)
         flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
     
     return redirect(url_for('main.view_student', student_id=student_id))
@@ -378,13 +408,17 @@ def add_group():
             )
             db.session.add(group)
             db.session.commit()
+            log.info('Добавлена группа: %s (%s) — %s',
+                     group.name, group.specialty, current_user.username)
             flash_msg('success', f'Группа {group.name} успешно добавлена')
             return redirect(url_for('main.groups'))
         except IntegrityError:
             db.session.rollback()
+            log.error('Дубликат группы: %s', form.name.data)
             flash_msg('error', 'Группа с таким названием уже существует')
         except Exception as e:
             db.session.rollback()
+            log.exception('Ошибка добавления группы: %s', e)
             flash_msg('error', f'Ошибка добавления группы: {str(e)}')
     
     return render_template('group_form.html', form=form, title='Добавить группу', group=None)
@@ -398,13 +432,16 @@ def edit_group(id):
         try:
             form.populate_obj(group)
             db.session.commit()
+            log.info('Изменена группа: %s — %s', group.name, current_user.username)
             flash_msg('success', f'Группа {group.name} обновлена')
             return redirect(url_for('main.groups'))
         except IntegrityError:
             db.session.rollback()
+            log.error('Дубликат при изменении группы: %s', form.name.data)
             flash_msg('error', 'Группа с таким названием уже существует')
         except Exception as e:
             db.session.rollback()
+            log.exception('Ошибка изменения группы: %s', e)
             flash_msg('error', f'Ошибка обновления группы: {str(e)}')
     
     return render_template('group_form.html', form=form, title='Редактировать группу', group=group)
@@ -413,12 +450,15 @@ def edit_group(id):
 @login_required
 def delete_group(id):
     group = Group.query.get_or_404(id)
+    name = group.name
     try:
         db.session.delete(group)
         db.session.commit()
-        flash_msg('success', f'Группа {group.name} удалена')
+        log.warning('Удалена группа: %s — %s', name, current_user.username)
+        flash_msg('success', f'Группа {name} удалена')
     except Exception as e:
         db.session.rollback()
+        log.exception('Ошибка удаления группы %s: %s', name, e)
         flash_msg('error', f'Ошибка удаления группы: {str(e)}')
     return redirect(url_for('main.groups'))
 
@@ -459,11 +499,14 @@ def add_subject():
                             subject = Subject(name=name, hours=hours)
                             db.session.add(subject)
                             added_count += 1
-                        except:
+                        except Exception as e:
+                            log.error('Не удалось добавить предмет «%s»: %s', name, e)
                             continue
             
             if added_count > 0:
                 db.session.commit()
+                log.info('Массово добавлено предметов: %d — %s',
+                         added_count, current_user.username)
                 flash_msg('success', f'Добавлено {added_count} новых предметов')
             else:
                 flash_msg('warning', 'Не удалось добавить ни одного предмета (возможно, они уже существуют)')
@@ -485,13 +528,17 @@ def add_subject():
                 )
                 db.session.add(subject)
                 db.session.commit()
+                log.info('Добавлен предмет: «%s», %d ч. — %s',
+                         subject.name, hours, current_user.username)
                 flash_msg('success', f'Предмет "{subject.name}" успешно добавлен')
                 return redirect(url_for('main.subjects'))
             except IntegrityError:
                 db.session.rollback()
+                log.error('Дубликат предмета: %s', name)
                 flash_msg('error', 'Предмет с таким названием уже существует')
             except Exception as e:
                 db.session.rollback()
+                log.exception('Ошибка добавления предмета: %s', e)
                 flash_msg('error', f'Ошибка добавления предмета: {str(e)}')
     
     # GET запрос - показываем форму
@@ -508,13 +555,16 @@ def edit_subject(id):
         try:
             form.populate_obj(subject)
             db.session.commit()
+            log.info('Изменён предмет: «%s» — %s', subject.name, current_user.username)
             flash_msg('success', f'Предмет "{subject.name}" обновлен')
             return redirect(url_for('main.subjects'))
         except IntegrityError:
             db.session.rollback()
+            log.error('Дубликат при изменении предмета: %s', form.name.data)
             flash_msg('error', 'Предмет с таким названием уже существует')
         except Exception as e:
             db.session.rollback()
+            log.exception('Ошибка изменения предмета: %s', e)
             flash_msg('error', f'Ошибка обновления предмета: {str(e)}')
     
     return render_template('subject_form.html', form=form, title='Редактировать предмет', subject=subject)
@@ -528,13 +578,18 @@ def delete_subject(id):
         # Проверяем, есть ли оценки по этому предмету
         grade_count = Grade.query.filter_by(subject_id=id).count()
         if grade_count > 0:
+            log.warning('Удаление предмета «%s» отклонено: %d оценок',
+                        subject.name, grade_count)
             flash_msg('error', f'Нельзя удалить предмет "{subject.name}", так как по нему уже есть {grade_count} оценок')
             return redirect(url_for('main.subjects'))
+        name = subject.name
         db.session.delete(subject)
         db.session.commit()
-        flash_msg('success', f'Предмет "{subject.name}" удален')
+        log.warning('Удалён предмет: «%s» — %s', name, current_user.username)
+        flash_msg('success', f'Предмет "{name}" удален')
     except Exception as e:
         db.session.rollback()
+        log.exception('Ошибка удаления предмета: %s', e)
         flash_msg('error', f'Ошибка удаления предмета: {str(e)}')
     
     return redirect(url_for('main.subjects'))
@@ -607,10 +662,14 @@ def add_grade():
             )
             db.session.add(grade)
             db.session.commit()
+            log.info('Оценка добавлена: %s, предмет «%s», значение %s (%s) от %s — %s',
+                     student.full_name, subject.name, form.grade_value.data,
+                     form.grade_type.data, form.date.data, current_user.username)
             flash_msg('success', f'Оценка по предмету "{subject.name}" для студента {student.full_name} успешно добавлена')
             return redirect(url_for('main.grades'))
         except Exception as e:
             db.session.rollback()
+            log.exception('Ошибка добавления оценки: %s', e)
             flash_msg('error', f'Ошибка добавления оценки: {str(e)}')
     
     return render_template('grade_form.html', form=form, title='Добавить оценку')
@@ -620,12 +679,16 @@ def add_grade():
 def delete_grade(id):
     """Удаление оценки"""
     grade = Grade.query.get_or_404(id)
+    info = 'студент %s, предмет «%s», значение %s' % (
+        grade.student.full_name, grade.subject.name, grade.grade_value)
     try:
         db.session.delete(grade)
         db.session.commit()
+        log.warning('Оценка удалена: %s — %s', info, current_user.username)
         flash_msg('success', 'Оценка удалена')
     except Exception as e:
         db.session.rollback()
+        log.exception('Ошибка удаления оценки: %s', e)
         flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
     return redirect(url_for('main.grades'))
 
@@ -659,6 +722,8 @@ def generate_report():
             } for s in query.all()]
             
             filepath = export_to_excel(data, 'students_report')
+            log.info('Экспорт отчёта: студенты (%s строк) — %s',
+                     len(data), current_user.username)
             return send_file(filepath, as_attachment=True)
         
         elif report_type == 'grades':
@@ -684,12 +749,15 @@ def generate_report():
             } for g in query.all()]
             
             filepath = export_to_excel(data, 'grades_report')
+            log.info('Экспорт отчёта: оценки (%s строк) — %s',
+                     len(data), current_user.username)
             return send_file(filepath, as_attachment=True)
         
         flash_msg('error', 'Неверный тип отчета')
         return redirect(url_for('main.reports'))
         
     except Exception as e:
+        log.exception('Ошибка генерации отчёта: %s', e)
         flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
         return redirect(url_for('main.reports'))
 
@@ -711,8 +779,10 @@ def report_students():
                 'Статус': student.status
             })
         filepath = export_to_excel(data, 'students_report')
+        log.info('Экспорт всех студентов (%s строк) — %s', len(data), current_user.username)
         return send_file(filepath, as_attachment=True)
     except Exception as e:
+        log.exception('Ошибка экспорта студентов: %s', e)
         flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
         return redirect(url_for('main.reports'))
 
@@ -736,6 +806,8 @@ def report_group(group_id):
             })
         
         filepath = export_to_excel(data, f'group_{group.name}_report')
+        log.info('Экспорт группы «%s» (%s строк) — %s',
+                 group.name, len(data), current_user.username)
         return send_file(filepath, as_attachment=True)
     except Exception as e:
         flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
@@ -763,9 +835,12 @@ def settings_backup():
                 include_files=form.include_files.data,
                 description=form.description.data or ''
             )
+            log.info('Создана резервная копия «%s» (%s) — %s',
+                     filename, form.backup_type.data, current_user.username)
             flash_msg('success', f'Резервная копия «{filename}» создана')
             return redirect(url_for('main.settings_backup'))
         except Exception as e:
+            log.exception('Ошибка создания резервной копии: %s', e)
             flash_msg('error', f'Ошибка создания резервной копии: {str(e)}')
             return redirect(url_for('main.settings_backup'))
 
@@ -777,8 +852,10 @@ def download_backup_file(filename):
     """Скачивание резервной копии"""
     path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
     if not os.path.isfile(path):
+        log.warning('Скачивание несуществующей копии «%s» — %s', filename, current_user.username)
         flash_msg('error', 'Файл резервной копии не найден')
         return redirect(url_for('main.settings_backup'))
+    log.info('Скачана резервная копия «%s» — %s', filename, current_user.username)
     return send_file(path, as_attachment=True)
 
 @main.route('/settings/backup/<filename>/restore', methods=['POST'])
@@ -787,13 +864,16 @@ def restore_backup_file(filename):
     """Восстановление базы данных из резервной копии"""
     path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
     if not os.path.isfile(path):
+        log.warning('Восстановление несуществующей копии «%s» — %s', filename, current_user.username)
         flash_msg('error', 'Файл резервной копии не найден')
         return redirect(url_for('main.settings_backup'))
 
     try:
         restore_backup(path)
+        log.warning('База восстановлена из копии «%s» — %s', filename, current_user.username)
         flash_msg('success', 'Данные восстановлены из резервной копии')
     except Exception as e:
+        log.exception('Ошибка восстановления из «%s»: %s', filename, e)
         flash_msg('error', f'Ошибка восстановления: {str(e)}')
 
     return redirect(url_for('main.settings_backup'))
@@ -803,8 +883,10 @@ def restore_backup_file(filename):
 def delete_backup_file(filename):
     """Удаление файла резервной копии"""
     if delete_backup(filename):
+        log.warning('Удалена резервная копия «%s» — %s', filename, current_user.username)
         flash_msg('success', 'Резервная копия удалена')
     else:
+        log.warning('Не удалось удалить резервную копию «%s» — %s', filename, current_user.username)
         flash_msg('error', 'Не удалось удалить резервную копию')
     return redirect(url_for('main.settings_backup'))
 
@@ -825,12 +907,17 @@ def settings_import():
                     import_type=form.import_type.data,
                     import_mode=form.import_mode.data
                 )
+                log.info('Импорт выполнен: тип %s, режим %s, строк %s — %s',
+                         form.import_type.data, form.import_mode.data,
+                         result.get('count'), current_user.username)
                 flash_msg('success', result['message'])
             except Exception as e:
+                log.exception('Ошибка импорта: %s', e)
                 flash_msg('error', f'Ошибка импорта: {str(e)}')
                 db.session.rollback()
                 return redirect(url_for('main.settings_import'))
         else:
+            log.warning('Импорт без выбранного файла — %s', current_user.username)
             flash_msg('error', 'Выберите файл для импорта')
 
     return render_template('settings_import.html', form=form, result=result)
