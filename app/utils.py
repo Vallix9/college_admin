@@ -20,6 +20,65 @@ DB_PATH = os.path.join(BASEDIR, 'college.db')
 LOGGER_NAME = 'college'
 LOG_FILENAME = 'app.log'
 
+# Значения оценок, которые не являются числами, но имеют числовой эквивалент.
+# Раньше эта таблица существовала в двух местах с разными значениями и разным
+# поведением на мусорных данных, из-за чего средние баллы расходились.
+NON_NUMERIC_GRADES = {
+    'зачет': 5.0,
+    'зачёт': 5.0,
+    'незачет': 2.0,
+    'незачёт': 2.0,
+}
+
+
+def grade_to_points(grade_value):
+    """Числовой эквивалент оценки или None, если оценку в баллы не перевести.
+
+    'зачет' = 5, 'незачет' = 2, числа и их строковые записи — как есть.
+    Всё остальное (пусто, 'отлично', мусор) возвращает None и в среднем
+    балле не участвует.
+    """
+    if grade_value is None:
+        return None
+
+    if isinstance(grade_value, bool):
+        return None
+
+    if isinstance(grade_value, (int, float)):
+        return float(grade_value)
+
+    text = str(grade_value).strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    if lowered in NON_NUMERIC_GRADES:
+        return NON_NUMERIC_GRADES[lowered]
+
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def average_grade(grades):
+    """Средний балл по списку оценок (моделей Grade, кортежей или значений).
+
+    Некорректные значения пропускаются, пустой набор даёт 0.
+    """
+    total = 0.0
+    count = 0
+
+    for item in grades or ():
+        value = getattr(item, 'grade_value', item)
+        points = grade_to_points(value)
+        if points is None:
+            continue
+        total += points
+        count += 1
+
+    return round(total / count, 2) if count else 0
+
 
 def setup_logging(log_dir=None, level=logging.INFO, max_bytes=2 * 1024 * 1024, backup_count=5):
     """Настраивает логирование в logs/app.log и в консоль.

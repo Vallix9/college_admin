@@ -38,20 +38,22 @@ def create_app(config_class='config.Config'):
     from app.routes import main
     app.register_blueprint(main)
     
-    # Хелперы журнала логов для шаблонов берём из utils — там же
-    # настроено само логирование
+    # Хелперы журнала логов и расчёта оценок для шаблонов берём из utils —
+    # там же настроено само логирование
     @app.context_processor
     def utility_processor():
         from app.utils import (get_log_level, extract_timestamp, extract_message,
                                count_logs_by_level, get_log_file_size,
-                               get_log_file_mtime)
+                               get_log_file_mtime, grade_to_points, average_grade)
         return {
             'get_log_level': get_log_level,
             'extract_timestamp': extract_timestamp,
             'extract_message': extract_message,
             'count_logs_by_level': count_logs_by_level,
             'get_log_file_size': get_log_file_size,
-            'get_log_file_mtime': get_log_file_mtime
+            'get_log_file_mtime': get_log_file_mtime,
+            'grade_to_points': grade_to_points,
+            'average_grade': average_grade
         }
     
     return app

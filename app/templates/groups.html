@@ -48,8 +48,8 @@
                                     <span class="badge bg-secondary">{{ group.year }}</span>
                                 </td>
                                 <td>
-                                    <span class="badge {% if group.student_count() > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
-                                        {{ group.student_count() }} студентов
+                                    <span class="badge {% if student_counts.get(group.id, 0) > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
+                                        {{ student_counts.get(group.id, 0) }} студентов
                                     </span>
                                 </td>
                                 <td>
@@ -98,7 +98,7 @@
                             <strong>{{ group.name }}</strong>
                             <div class="small text-muted">{{ group.specialty or 'Без специальности' }}</div>
                         </div>
-                        <span class="badge bg-primary rounded-pill">{{ group.student_count() }}</span>
+                        <span class="badge bg-primary rounded-pill">{{ student_counts.get(group.id, 0) }}</span>
                     </div>
                     {% else %}
                     <div class="text-center text-muted py-3">

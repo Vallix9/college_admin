@@ -1,20 +1,17 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, session, jsonify
+from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file
 from flask_login import login_user, logout_user, login_required, current_user
 from urllib.parse import urlparse
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 from datetime import datetime, date
 from sqlalchemy import or_, func, desc
-import functools
-import traceback
 import os
-import json
-import secrets
 from app.init_ import db
 from app.models import User, Student, Group, Subject, Grade, SystemSettings
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
-from app.utils import get_logger
+from app.utils import get_logger, average_grade
 
 log = get_logger()
 
@@ -55,45 +52,86 @@ def get_pagination_args():
     }
 
 def apply_filters(query, model):
+    """Применяет фильтры из строки запроса и возвращает их же для шаблона.
+
+    Возвращённый словарь используется формами фильтрации, поэтому в него
+    попадает и search — иначе поле поиска теряет введённое значение при
+    переходе на следующую страницу.
+    """
     filters = {}
-    if 'search' in request.args:
-        search = request.args.get('search', '')
-        if search:
-            search_term = f'%{search}%'
-            if model == Student:
-                query = query.filter(or_(
-                    Student.last_name.ilike(search_term),
-                    Student.first_name.ilike(search_term),
-                    Student.student_id.ilike(search_term)
-                ))
-    
-    if 'group' in request.args and request.args.get('group') != 'all':
-        group_id = request.args.get('group')
+    search = (request.args.get('search') or '').strip()
+    if search:
+        search_term = f'%{search}%'
+        if model is Student:
+            query = query.filter(or_(
+                Student.last_name.ilike(search_term),
+                Student.first_name.ilike(search_term),
+                Student.patronymic.ilike(search_term),
+                Student.student_id.ilike(search_term)
+            ))
+        elif model is Subject:
+            query = query.filter(Subject.name.ilike(search_term))
+        filters['search'] = search
+
+    group_id = request.args.get('group')
+    if group_id and group_id != 'all':
         query = query.filter_by(group_id=group_id)
         filters['group'] = group_id
-    
-    if 'status' in request.args and request.args.get('status') != 'all':
-        status = request.args.get('status')
+
+    status = request.args.get('status')
+    if status and status != 'all':
         query = query.filter_by(status=status)
         filters['status'] = status
-    
+
+    # Фильтр по полу есть в students.html, но бэкенд его не обрабатывал —
+    # выбор молча ничего не менял
+    gender = request.args.get('gender')
+    if gender and gender != 'all':
+        query = query.filter_by(gender=gender)
+        filters['gender'] = gender
+
     return query, filters
 
-# ===================== ДЕКОРАТОРЫ =====================
-def handle_db_exceptions(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except IntegrityError:
-            db.session.rollback()
-            flash_msg('error', 'Запись с такими данными уже существует')
-            return None
-        except Exception as e:
-            db.session.rollback()
-            flash_msg('error', f'Ошибка операции: {str(e)}')
-            return None
-    return wrapper
+def group_student_counts(groups_list, status='active'):
+    """Число активных студентов по каждой группе одним запросом.
+
+    group.student_count() дёргал отдельный COUNT на каждую групку, а
+    шаблоны зовут его по два-три раза на группу.
+    """
+    if not groups_list:
+        return {}
+
+    rows = db.session.query(
+        Student.group_id,
+        db.func.count(Student.id)
+    ).filter(
+        Student.group_id.in_([g.id for g in groups_list]),
+        Student.status == status
+    ).group_by(Student.group_id).all()
+
+    counts = {group_id: count for group_id, count in rows}
+    return {g.id: counts.get(g.id, 0) for g in groups_list}
+
+def student_average_grades():
+    """Средние баллы всех студентов одним запросом.
+
+    students.html звал student.average_grade() четыре раза на строку, а
+    relationship grades ленивый — на каждого студента уходил отдельный
+    SELECT. Считаем пачкой.
+    """
+    rows = db.session.query(Grade.student_id, Grade.grade_value).all()
+    buckets = {}
+    for student_id, value in rows:
+        buckets.setdefault(student_id, []).append(value)
+    return {student_id: average_grade(values) for student_id, values in buckets.items()}
+
+
+def subject_grade_counts():
+    """Число оценок по каждому предмету одним запросом (для subjects.html)."""
+    rows = db.session.query(
+        Grade.subject_id, db.func.count(Grade.id)
+    ).group_by(Grade.subject_id).all()
+    return dict(rows)
 
 # ===================== АУТЕНТИФИКАЦИЯ =====================
 @main.route('/')
@@ -111,7 +149,11 @@ def dashboard():
         }
         
         recent_students = Student.query.order_by(desc(Student.created_at)).limit(5).all()
-        recent_grades = Grade.query.order_by(desc(Grade.created_at)).limit(10).all()
+        # joinedload, иначе обращение к grade.student в шаблоне даёт
+        # отдельный SELECT на каждую из десяти оценок
+        recent_grades = (Grade.query
+                         .options(joinedload(Grade.student), joinedload(Grade.subject))
+                         .order_by(desc(Grade.created_at)).limit(10).all())
         
         return render_template('dashboard.html', 
                              stats=stats, 
@@ -171,7 +213,8 @@ def students():
     return render_template('students.html', 
                          students=students_paginated,
                          groups=Group.query.all(),
-                         current_filters=filters)
+                         current_filters=filters,
+                         averages=student_average_grades())
 
 @main.route('/students/add', methods=['GET', 'POST'])
 @login_required
@@ -274,23 +317,8 @@ def view_student(student_id):
         grades_by_subject[subject_id]['grades'].append(grade)
     
     # Вычисляем средний балл по каждому предмету
-    for subject_id, data in grades_by_subject.items():
-        numeric_grades = []
-        for grade in data['grades']:
-            try:
-                if str(grade.grade_value).isdigit():
-                    numeric_grades.append(int(grade.grade_value))
-                elif grade.grade_value == 'зачет':
-                    numeric_grades.append(5)
-                elif grade.grade_value == 'незачет':
-                    numeric_grades.append(2)
-            except:
-                continue
-        
-        if numeric_grades:
-            data['average'] = sum(numeric_grades) / len(numeric_grades)
-        else:
-            data['average'] = 0
+    for data in grades_by_subject.values():
+        data['average'] = average_grade(data['grades'])
     
     # Все доступные предметы
     all_subjects = Subject.query.order_by(Subject.name).all()
@@ -393,7 +421,10 @@ def delete_grade_from_student(student_id, grade_id):
 @main.route('/groups')
 @login_required
 def groups():
-    return render_template('groups.html', groups=Group.query.all())
+    groups_list = Group.query.order_by(Group.name).all()
+    # Один запрос вместо student_count() на каждую группу в шаблоне (N+1)
+    return render_template('groups.html', groups=groups_list,
+                           student_counts=group_student_counts(groups_list))
 
 @main.route('/groups/add', methods=['GET', 'POST'])
 @login_required
@@ -468,7 +499,8 @@ def delete_group(id):
 def subjects():
     """Список всех предметов"""
     subjects_list = Subject.query.order_by(Subject.name).all()
-    return render_template('subjects.html', subjects=subjects_list)
+    return render_template('subjects.html', subjects=subjects_list,
+                           grade_counts=subject_grade_counts())
 
 @main.route('/subjects/add', methods=['GET', 'POST'])
 @login_required
@@ -603,7 +635,12 @@ def grades():
     group_id = request.args.get('group', type=int)
     student_id = request.args.get('student', type=int)
     # Создаем базовый запрос
-    query = Grade.query.join(Student).join(Subject)
+    # options подгружают студента, группу и предмет вместе со строкой:
+    # без них обращения в шаблоне дают отдельный SELECT на каждую оценку
+    query = Grade.query.join(Student).join(Subject).options(
+        joinedload(Grade.student).joinedload(Student.group),
+        joinedload(Grade.subject)
+    )
     
     # Применяем фильтры
     if group_id:
@@ -696,7 +733,12 @@ def delete_grade(id):
 @main.route('/reports')
 @login_required
 def reports():
-    return render_template('reports.html', groups=Group.query.all())
+    groups_list = Group.query.order_by(Group.name).all()
+    return render_template('reports.html', groups=groups_list,
+                           student_counts=group_student_counts(groups_list),
+                           total_grades=db.session.query(
+                               db.func.count(Grade.id)).scalar() or 0,
+                           subject_count=Subject.query.count())
 
 @main.route('/reports/generate', methods=['POST'])
 @login_required

@@ -76,8 +76,8 @@
                             {{ subject.created_at.strftime('%d.%m.%Y') if subject.created_at else '—' }}
                         </td>
                         <td>
-                            <span class="badge {% if subject.grades|length > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
-                                {{ subject.grades|length }} оценок
+                    <span class="badge {% if grade_counts.get(subject.id, 0) > 0 %}bg-primary{% else %}bg-secondary{% endif %}">
+                        {{ grade_counts.get(subject.id, 0) }} оценок
                             </span>
                         </td>
                         <td>

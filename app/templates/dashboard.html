@@ -197,12 +197,12 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    {% set grade_value = grade.grade_value|int if grade.grade_value else 0 %}
-                                    <span class="badge 
-                                        {% if grade_value >= 4 %}bg-success
-                                        {% elif grade_value >= 3 %}bg-warning
+                                    {% set points = grade_to_points(grade.grade_value) or 0 %}
+                                    <span class="badge
+                                        {% if points >= 4 %}bg-success
+                                        {% elif points >= 3 %}bg-warning
                                         {% else %}bg-danger{% endif %}">
-                                        {{ grade_value }}
+                                        {{ grade.grade_value }}
                                     </span>
                                 </td>
                                 <td>{{ grade.grade_type or 'Обычная' }}</td>

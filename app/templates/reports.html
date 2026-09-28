@@ -36,7 +36,7 @@
                             <div class="small text-muted">{{ group.specialty or 'Без специальности' }}</div>
                         </div>
                         <div>
-                            <span class="badge bg-primary rounded-pill me-2">{{ group.student_count() }} студентов</span>
+                            <span class="badge bg-primary rounded-pill me-2">{{ student_counts.get(group.id, 0) }} студентов</span>
                             <i class="bi bi-download"></i>
                         </div>
                     </a>
@@ -125,11 +125,7 @@
                         <div class="p-3 bg-light rounded">
                             <i class="bi bi-person display-4 text-success"></i>
                             <h3 class="mt-2">
-                                {% set total_students = [] %}
-                                {% for group in groups %}
-                                    {% if total_students.append(group.student_count()) %}{% endif %}
-                                {% endfor %}
-                                {{ total_students|sum }}
+                                {{ student_counts.values()|sum }}
                             </h3>
                             <p class="text-muted mb-0">Студентов всего</p>
                         </div>
@@ -138,15 +134,7 @@
                     <div class="col-md-3 text-center mb-3">
                         <div class="p-3 bg-light rounded">
                             <i class="bi bi-journal display-4 text-warning"></i>
-                            <h3 class="mt-2">
-                                {% set total_grades = namespace(count=0) %}
-                                {% for group in groups %}
-                                    {% for student in group.students %}
-                                        {% set total_grades.count = total_grades.count + student.grades|length %}
-                                    {% endfor %}
-                                {% endfor %}
-                                {{ total_grades.count }}
-                            </h3>
+                            <h3 class="mt-2">{{ total_grades }}</h3>
                             <p class="text-muted mb-0">Оценок всего</p>
                         </div>
                     </div>
@@ -154,7 +142,7 @@
                     <div class="col-md-3 text-center mb-3">
                         <div class="p-3 bg-light rounded">
                             <i class="bi bi-database display-4 text-info"></i>
-                            <h3 class="mt-2">{{ groups|length + 5 }}</h3>
+                            <h3 class="mt-2">{{ subject_count }}</h3>
                             <p class="text-muted mb-0">Предметов всего</p>
                         </div>
                     </div>

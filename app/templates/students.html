@@ -137,8 +137,9 @@
                             {% endif %}
                         </td>
                         <td>
-                            <span class="badge {% if student.average_grade() >= 4.5 %}bg-success{% elif student.average_grade() >= 3.5 %}bg-primary{% elif student.average_grade() > 0 %}bg-warning{% else %}bg-secondary{% endif %}">
-                                {{ "%.1f"|format(student.average_grade()) if student.average_grade() else '—' }}
+                            {% set avg = averages.get(student.id, 0) %}
+                            <span class="badge {% if avg >= 4.5 %}bg-success{% elif avg >= 3.5 %}bg-primary{% elif avg > 0 %}bg-warning{% else %}bg-secondary{% endif %}">
+                                {{ "%.1f"|format(avg) if avg else '—' }}
                             </span>
                         </td>
                         <td>

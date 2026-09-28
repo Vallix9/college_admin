@@ -4,12 +4,23 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from app.init_ import db, login_manager
 
+
+def now():
+    """Текущее локальное время без таймзоны.
+
+    datetime.utcnow() помечен устаревшим начиная с Python 3.12, и вдобавок
+    в базу писалось время на несколько часов раньше местного — из-за чего
+    в отчётах и в поле «последний вход» съезжали даты.
+    """
+    return datetime.now()
+
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256))
     role = db.Column(db.String(20), default='admin')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now)
     
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -33,7 +44,7 @@ class SystemSettings(db.Model):
     items_per_page = db.Column(db.Integer, default=20)
     auto_backup = db.Column(db.Boolean, default=True)
     backup_frequency = db.Column(db.String(20), default='daily')  # daily, weekly, monthly
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=now, onupdate=now)
     
     def to_dict(self):
         """Преобразуем настройки в словарь"""
@@ -90,7 +101,7 @@ class Group(db.Model):
     name = db.Column(db.String(50), unique=True, nullable=False)
     specialty = db.Column(db.String(200))
     year = db.Column(db.Integer)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now)
     
     students = db.relationship('Student', backref='group', lazy=True, cascade='all, delete-orphan')
     
@@ -114,8 +125,8 @@ class Student(db.Model):
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'))
     
     status = db.Column(db.String(20), default='active')
-    enrollment_date = db.Column(db.Date, default=datetime.utcnow().date())
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    enrollment_date = db.Column(db.Date, default=now().date())
+    created_at = db.Column(db.DateTime, default=now)
     
     grades = db.relationship('Grade', backref='student', lazy=True, cascade='all, delete-orphan')
     
@@ -129,29 +140,9 @@ class Student(db.Model):
         return f'{self.last_name} {self.first_name[0]}.{patronymic_initial}'
     
     def average_grade(self):
-        if not self.grades:
-            return 0
-        
-        total = 0
-        count = 0
-        
-        for grade in self.grades:
-            value = grade.grade_value
-            if value is not None:
-                try:
-                    # Преобразуем значение в число
-                    if isinstance(value, (int, float)):
-                        total += float(value)
-                        count += 1
-                    elif isinstance(value, str):
-                        # Пробуем преобразовать строку в число
-                        total += float(value)
-                        count += 1
-                except (ValueError, TypeError):
-                    # Пропускаем некорректные значения
-                    continue
-        
-        return round(total / count, 2) if count > 0 else 0
+        """Средний балл студента. Расчёт общий с журналом — в utils.average_grade."""
+        from app.utils import average_grade
+        return average_grade(self.grades)
     
     def __repr__(self):
         return f'<Student {self.full_name}>'
@@ -160,7 +151,7 @@ class Subject(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     hours = db.Column(db.Integer, default=72)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now)
     
     grades = db.relationship('Grade', backref='subject', lazy=True, cascade='all, delete-orphan')
     
@@ -173,9 +164,9 @@ class Grade(db.Model):
     subject_id = db.Column(db.Integer, db.ForeignKey('subject.id'), nullable=False)
     grade_value = db.Column(db.String(20), nullable=False)
     grade_type = db.Column(db.String(50))
-    date = db.Column(db.Date, default=datetime.utcnow().date())
+    date = db.Column(db.Date, default=now().date())
     comments = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=now)
     
     def get_grade_color(self):
         """Возвращает класс Bootstrap для цвета оценки"""
@@ -191,20 +182,3 @@ class Grade(db.Model):
     
     def __repr__(self):
         return f'<Grade {self.grade_value} for student {self.student_id}>'
-    
-class StudentSubject(db.Model):
-    """Связь студента с предметами (для журнала успеваемости)"""
-    id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
-    subject_id = db.Column(db.Integer, db.ForeignKey('subject.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Отношения
-    student = db.relationship('Student', backref='student_subjects', lazy=True)
-    subject = db.relationship('Subject', backref='subject_students', lazy=True)
-    
-    # Уникальность связи студент-предмет
-    __table_args__ = (db.UniqueConstraint('student_id', 'subject_id', name='_student_subject_uc'),)
-    
-    def __repr__(self):
-        return f'<StudentSubject {self.student_id}-{self.subject_id}>'
