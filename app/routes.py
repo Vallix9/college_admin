@@ -9,9 +9,11 @@ import os
 from app.init_ import db
 from app.models import User, Student, Group, Subject, Grade, SystemSettings
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
+from app.forms import ClearLogsForm
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
-from app.utils import get_logger, average_grade
+from app.utils import get_logger, average_grade, build_import_template
+from app.utils import read_log_lines, get_log_file_path, clear_log_file
 
 log = get_logger()
 
@@ -855,12 +857,71 @@ def report_group(group_id):
         flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
         return redirect(url_for('main.reports'))
 
-# ===================== ПРОСТЫЕ НАСТРОЙКИ =====================
-@main.route('/settings')
+# ===================== НАСТРОЙКИ =====================
+@main.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
-    """Простая страница с базовыми настройками"""
-    return render_template('settings.html')
+    """Настройки системы: сохранение, смена пароля, сброс к умолчаниям"""
+    current = get_settings()
+    form = SettingsForm(obj=current)
+
+    # Сброс обрабатываем до validate_on_submit: сброшенная форма невалидна,
+    # потому что поля основных настроек обязательны
+    if form.reset.data and request.method == 'POST':
+        SystemSettings.reset_to_default()
+        log.warning('Настройки сброшены к значениям по умолчанию — %s', current_user.username)
+        flash_msg('success', 'Настройки сброшены к значениям по умолчанию')
+        return redirect(url_for('main.settings'))
+
+    if form.validate_on_submit():
+        changed = []
+        for field in ('college_name', 'academic_year', 'max_students_per_group',
+                      'theme_color', 'items_per_page', 'export_format',
+                      'auto_backup', 'backup_frequency',
+                      'enable_system_notifications', 'enable_email_notifications'):
+            new_value = getattr(form, field).data
+            if getattr(current, field) != new_value:
+                changed.append(field)
+                setattr(current, field, new_value)
+
+        if form.new_password.data:
+            current_user.set_password(form.new_password.data)
+            changed.append('пароль')
+
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            log.exception('Ошибка сохранения настроек: %s', e)
+            flash_msg('error', f'Не удалось сохранить настройки: {e}')
+            return render_template('settings.html', form=form, settings=current,
+                                   **_settings_stats())
+
+        if changed:
+            log.info('Настройки изменены (%s) — %s', ', '.join(changed), current_user.username)
+            message = 'Настройки сохранены'
+            if 'пароль' in changed:
+                message += ', пароль обновлён'
+            flash_msg('success', message)
+        else:
+            flash_msg('info', 'Изменений не было')
+        return redirect(url_for('main.settings'))
+
+    if form.errors:
+        log.warning('Форма настроек не прошла валидацию: %s', ', '.join(form.errors))
+        flash_msg('error', 'Проверьте правильность заполнения полей')
+
+    return render_template('settings.html', form=form, settings=current,
+                           **_settings_stats())
+
+
+def _settings_stats():
+    """Счётчики для блока «Сведения» на странице настроек."""
+    return {'stats': {
+        'students': Student.query.count(),
+        'groups': Group.query.count(),
+        'subjects': Subject.query.count(),
+    }}
 
 # ===================== РЕЗЕРВНОЕ КОПИРОВАНИЕ =====================
 @main.route('/settings/backup', methods=['GET', 'POST'])
@@ -872,13 +933,9 @@ def settings_backup():
 
     if form.validate_on_submit():
         try:
-            filename = create_backup(
-                backup_type=form.backup_type.data,
-                include_files=form.include_files.data,
-                description=form.description.data or ''
-            )
-            log.info('Создана резервная копия «%s» (%s) — %s',
-                     filename, form.backup_type.data, current_user.username)
+            filename = create_backup(description=form.description.data or '')
+            log.info('Создана резервная копия «%s» — %s',
+                     filename, current_user.username)
             flash_msg('success', f'Резервная копия «{filename}» создана')
             return redirect(url_for('main.settings_backup'))
         except Exception as e:
@@ -943,26 +1000,132 @@ def settings_import():
     if form.validate_on_submit():
         file = form.file.data
         if file and file.filename:
+            import_type = form.import_type.data
+            import_mode = form.import_mode.data
             try:
-                result = import_from_file(
-                    file,
-                    import_type=form.import_type.data,
-                    import_mode=form.import_mode.data
-                )
-                log.info('Импорт выполнен: тип %s, режим %s, строк %s — %s',
-                         form.import_type.data, form.import_mode.data,
-                         result.get('count'), current_user.username)
-                flash_msg('success', result['message'])
+                result = import_from_file(file, import_type=import_type,
+                                          import_mode=import_mode)
+                log.info('Импорт выполнен: тип %s, режим %s, записей %s, '
+                         'пропущено %s — %s',
+                         import_type, import_mode, result.get('count'),
+                         result.get('skipped', 0), current_user.username)
+                if result.get('errors_total'):
+                    # Часть строк не прошла проверку — отчёт показываем
+                    # на странице, а не теряем среди прочих flash-сообщений
+                    result['fatal'] = None
+                    flash_msg('warning', result['message'])
+                else:
+                    flash_msg('success', result['message'])
+            except ValueError as e:
+                # Ошибки самого файла: показываем на странице, чтобы можно
+                # было понять, что исправлять
+                log.warning('Файл импорта отклонён (%s): %s',
+                            import_type, e)
+                db.session.rollback()
+                result = {'type': import_type, 'mode': import_mode, 'count': 0,
+                          'skipped': 0, 'columns': [],
+                          'errors': [str(e)], 'errors_total': 1,
+                          'fatal': str(e),
+                          'message': f'Импорт не выполнен: {e}'}
+                flash_msg('error', f'Импорт не выполнен: {e}')
             except Exception as e:
                 log.exception('Ошибка импорта: %s', e)
-                flash_msg('error', f'Ошибка импорта: {str(e)}')
                 db.session.rollback()
-                return redirect(url_for('main.settings_import'))
+                flash_msg('error', f'Ошибка импорта: {str(e)}')
         else:
             log.warning('Импорт без выбранного файла — %s', current_user.username)
             flash_msg('error', 'Выберите файл для импорта')
 
     return render_template('settings_import.html', form=form, result=result)
+
+
+@main.route('/settings/export-template/<import_type>')
+@login_required
+def export_import_template(import_type):
+    """Скачивание .xlsx-шаблона с правильными названиями столбцов"""
+    try:
+        filepath, filename = build_import_template(import_type)
+    except ValueError as e:
+        log.warning('Запрошен неизвестный шаблон импорта: %s', import_type)
+        flash_msg('error', str(e))
+        return redirect(url_for('main.settings_import'))
+
+    log.info('Скачан шаблон импорта «%s» — %s', filename, current_user.username)
+    return send_file(filepath, as_attachment=True,
+                     download_name=filename)
+
+# ===================== ЖУРНАЛ СОБЫТИЙ =====================
+LOG_LEVELS = ('INFO', 'WARNING', 'ERROR', 'DEBUG')
+LOG_PAGE_SIZE = 200
+
+
+@main.route('/settings/logs')
+@login_required
+def view_logs():
+    """Просмотр журнала событий с фильтрацией по уровню и поиском"""
+    raw_levels = request.args.getlist('level') or list(LOG_LEVELS[:3])
+    levels = [lvl for lvl in LOG_LEVELS if lvl in raw_levels] or list(LOG_LEVELS)
+
+    search = (request.args.get('q') or '').strip()[:200]
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+
+    filtered = read_log_lines(limit=0, level=levels,
+                              search=search or None)
+    total = len(filtered)
+    pages = max(1, (total + LOG_PAGE_SIZE - 1) // LOG_PAGE_SIZE)
+    page = min(page, pages)
+    offset = (page - 1) * LOG_PAGE_SIZE
+    logs = filtered[offset:offset + LOG_PAGE_SIZE]
+
+    return render_template(
+        'view_logs.html', logs=logs, levels=levels, all_levels=list(LOG_LEVELS),
+        search=search, page=page, pages=pages, total=total,
+        clear_form=ClearLogsForm(),
+        from_index=offset + 1 if total else 0,
+        to_index=offset + len(logs))
+
+
+@main.route('/api/system/download-logs')
+@login_required
+def download_logs():
+    """Скачивание текущего журнала как .txt"""
+    path = get_log_file_path()
+    if not os.path.isfile(path):
+        flash_msg('error', 'Файл журнала ещё не создан')
+        return redirect(url_for('main.view_logs'))
+
+    log.info('Скачан журнал событий — %s', current_user.username)
+    return send_file(path, as_attachment=True, mimetype='text/plain',
+                     download_name=os.path.basename(path))
+
+
+@main.route('/api/system/clear-logs', methods=['POST'])
+@login_required
+def clear_logs():
+    """Очистка журнала.
+
+    Глобального CSRFProtect в проекте нет, поэтому токен проверяет форма:
+    вызывающий обязан передать csrf_token в теле или в заголовке X-CSRFToken.
+    """
+    form = ClearLogsForm()
+    # validate(), а не validate_on_submit(): эндпоинт вызывается из JS без
+    # кнопки отправки, поэтому поля submit в теле запроса нет
+    if not form.validate():
+        log.warning('Очистка журнала отклонена: недействительный CSRF-токен — %s',
+                    current_user.username)
+        return {'success': False, 'error': 'Недействительный CSRF-токен'}, 400
+
+    if not clear_log_file():
+        log.warning('Попытка очистить несуществующий журнал — %s',
+                    current_user.username)
+        return {'success': False, 'error': 'Файл журнала ещё не создан'}, 404
+
+    # Запись после очистки: сам факт очистки тоже должен попасть в журнал
+    log.warning('Журнал событий очищен вручную — %s', current_user.username)
+    return {'success': True}
 
 # ===================== API =====================
 @main.route('/health')

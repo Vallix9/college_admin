@@ -115,6 +115,11 @@
 
 {% block content %}
 <div class="card">
+    {# Токен для JS-запроса очистки: глобального CSRFProtect в проекте нет,
+       проверяет его ClearLogsForm, а JS шлёт его в заголовке X-CSRFToken #}
+    <form id="clearLogsForm" class="d-none">
+        {{ clear_form.hidden_tag() }}
+    </form>
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0">Системные логи</h5>
         <div class="btn-group">
@@ -132,47 +137,60 @@
     
     <!-- Поиск и фильтры -->
     <div class="log-search">
-        <div class="container-fluid">
-            <div class="row g-3">
-                <div class="col-md-6">
-                    <div class="input-group">
-                        <span class="input-group-text"><i class="bi bi-search"></i></span>
-                        <input type="text" class="form-control" id="logSearch" placeholder="Поиск в логах..." onkeyup="filterLogs()">
-                        <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()">
-                            <i class="bi bi-x"></i>
-                        </button>
+        <form method="GET" action="{{ url_for('main.view_logs') }}">
+            <div class="container-fluid">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" name="q" value="{{ search }}"
+                                   placeholder="Поиск в логах...">
+                            {% for lvl in levels %}
+                            <input type="hidden" name="level" value="{{ lvl }}">
+                            {% endfor %}
+                            <button class="btn btn-outline-secondary" type="submit">
+                                Найти
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="d-flex flex-wrap gap-2">
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="checkbox" id="filterInfo" checked onchange="filterLogs()">
-                            <label class="form-check-label" for="filterInfo">
-                                <span class="badge bg-info">INFO</span>
-                            </label>
-                        </div>
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="checkbox" id="filterWarning" checked onchange="filterLogs()">
-                            <label class="form-check-label" for="filterWarning">
-                                <span class="badge bg-warning">WARNING</span>
-                            </label>
-                        </div>
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="checkbox" id="filterError" checked onchange="filterLogs()">
-                            <label class="form-check-label" for="filterError">
-                                <span class="badge bg-danger">ERROR</span>
-                            </label>
-                        </div>
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="checkbox" id="filterDebug" onchange="filterLogs()">
-                            <label class="form-check-label" for="filterDebug">
-                                <span class="badge bg-secondary">DEBUG</span>
-                            </label>
+                    <div class="col-md-6">
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            {% set active = levels|list %}
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="level" value="INFO"
+                                       id="filterInfo" {% if 'INFO' in active %}checked{% endif %}>
+                                <label class="form-check-label" for="filterInfo">
+                                    <span class="badge bg-info">INFO</span>
+                                </label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="level" value="WARNING"
+                                       id="filterWarning" {% if 'WARNING' in active %}checked{% endif %}>
+                                <label class="form-check-label" for="filterWarning">
+                                    <span class="badge bg-warning">WARNING</span>
+                                </label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="level" value="ERROR"
+                                       id="filterError" {% if 'ERROR' in active %}checked{% endif %}>
+                                <label class="form-check-label" for="filterError">
+                                    <span class="badge bg-danger">ERROR</span>
+                                </label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="level" value="DEBUG"
+                                       id="filterDebug" {% if 'DEBUG' in active %}checked{% endif %}>
+                                <label class="form-check-label" for="filterDebug">
+                                    <span class="badge bg-secondary">DEBUG</span>
+                                </label>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">Применить</button>
+                            <a href="{{ url_for('main.view_logs') }}" class="btn btn-outline-secondary btn-sm">Сброс</a>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
+        </form>
     </div>
     
     <!-- Контейнер для логов -->
@@ -219,10 +237,10 @@
             <div class="d-flex justify-content-between align-items-center">
                 <div>
                     <small class="text-muted" id="logCount">
-                        {% if logs %}
-                            Показано {{ logs|length }} записей
+                        {% if total %}
+                            Показано {{ from_index }}–{{ to_index }} из {{ total }} записей
                         {% else %}
-                            Нет записей
+                            Нет записей по этим условиям
                         {% endif %}
                     </small>
                 </div>
@@ -240,6 +258,38 @@
             </div>
         </div>
     </div>
+    <!-- Пагинация -->
+    {% if pages > 1 %}
+    <div class="card-footer">
+        <nav aria-label="Страницы журнала">
+            <ul class="pagination pagination-sm justify-content-center mb-0">
+                {% set qs = {'q': search} %}
+                <li class="page-item {{ 'disabled' if page <= 1 }}">
+                    <a class="page-link"
+                       href="{{ url_for('main.view_logs', page=page-1, level=levels, q=search or None) }}">
+                        Назад
+                    </a>
+                </li>
+                {% for p in range(1, pages + 1) %}
+                    {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+                    <li class="page-item {{ 'active' if p == page }}">
+                        <a class="page-link"
+                           href="{{ url_for('main.view_logs', page=p, level=levels, q=search or None) }}">{{ p }}</a>
+                    </li>
+                    {% elif p == 2 or p == pages - 1 %}
+                    <li class="page-item disabled"><span class="page-link">…</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {{ 'disabled' if page >= pages }}">
+                    <a class="page-link"
+                       href="{{ url_for('main.view_logs', page=page+1, level=levels, q=search or None) }}">
+                        Вперёд
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Статистика логов -->
@@ -320,6 +370,9 @@
 <script>
 let autoScrollEnabled = false;
 let autoScrollInterval;
+// На первой странице перезагрузка при прокрутке бессмысленна — новые
+// записи всё равно не попадут в выдачу
+const isFirstLogPage = {{ 'true' if page <= 1 else 'false' }};
 
 function getLogLevel(logText) {
     if (logText.includes('ERROR') || logText.includes('CRITICAL')) return 'error';
@@ -340,91 +393,36 @@ function extractMessage(logText) {
     return logText.replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.*?\[(INFO|WARNING|ERROR|DEBUG|CRITICAL)\]\s*/, '');
 }
 
-function filterLogs() {
-    const searchText = document.getElementById('logSearch').value.toLowerCase();
-    const showInfo = document.getElementById('filterInfo').checked;
-    const showWarning = document.getElementById('filterWarning').checked;
-    const showError = document.getElementById('filterError').checked;
-    const showDebug = document.getElementById('filterDebug').checked;
-    
-    const rows = document.querySelectorAll('#logsContainer tr');
-    let visibleCount = 0;
-    
-    rows.forEach(row => {
-        const text = row.textContent.toLowerCase();
-        const levelClass = Array.from(row.classList).find(cls => cls.startsWith('log-level-'));
-        const level = levelClass ? levelClass.replace('log-level-', '') : 'info';
-        
-        let shouldShow = false;
-        
-        // Проверяем уровень
-        if ((level === 'info' && showInfo) ||
-            (level === 'warning' && showWarning) ||
-            (level === 'error' && showError) ||
-            (level === 'debug' && showDebug)) {
-            shouldShow = true;
-        }
-        
-        // Проверяем поиск
-        if (shouldShow && searchText && !text.includes(searchText)) {
-            shouldShow = false;
-        }
-        
-        row.style.display = shouldShow ? '' : 'none';
-        if (shouldShow) visibleCount++;
-    });
-    
-    document.getElementById('logCount').textContent = `Показано ${visibleCount} записей`;
-}
-
-function clearSearch() {
-    document.getElementById('logSearch').value = '';
-    filterLogs();
-}
-
 function refreshLogs() {
+    // Перезагрузка с сохранением текущих фильтров и страницы
     location.reload();
 }
 
 function clearLogs() {
-    if (confirm('Вы уверены, что хотите очистить все логи?\nЭто действие нельзя отменить.')) {
-        fetch('/api/system/clear-logs', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert('Логи очищены');
-                location.reload();
-            } else {
-                alert('Ошибка: ' + data.error);
-            }
-        })
-        .catch(error => {
-            alert('Ошибка сети: ' + error);
-        });
+    if (!confirm('Вы уверены, что хотите очистить все логи?\nЭто действие нельзя отменить.')) {
+        return;
     }
+    const token = document.querySelector('#clearLogsForm input[name="csrf_token"]').value;
+    // Токен идёт в теле, а не в X-CSRFToken: глобальный CSRFProtect не
+    // инициализирован, поэтому WTF_CSRF_HEADERS не задан и заголовок не читается
+    fetch("{{ url_for('main.clear_logs') }}", {
+        method: 'POST',
+        body: new URLSearchParams({csrf_token: token})
+    })
+    .then(response => response.json().then(data => ({ok: response.ok, data})))
+    .then(({ok, data}) => {
+        if (ok && data.success) {
+            location.reload();
+        } else {
+            alert('Не удалось очистить журнал: ' + (data.error || 'неизвестная ошибка'));
+        }
+    })
+    .catch(() => alert('Не удалось очистить журнал: ошибка сети'));
 }
 
 function downloadLogs() {
-    fetch('/api/system/download-logs')
-        .then(response => response.blob())
-        .then(blob => {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `logs_${new Date().toISOString().slice(0,10)}.txt`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        })
-        .catch(error => {
-            alert('Ошибка скачивания: ' + error);
-        });
+    // Обычная ссылка, а не fetch: файл отдаётся как вложение
+    window.location.href = "{{ url_for('main.download_logs') }}";
 }
 
 function scrollToTop() {
@@ -455,12 +453,17 @@ function autoScroll() {
         autoScrollInterval = setInterval(() => {
             const container = document.querySelector('.card-body');
             if (container.scrollTop + container.clientHeight >= container.scrollHeight - 10) {
-                // Если уже внизу, обновляем логи
-                refreshLogs();
+                // Уже внизу — подтягиваем новые записи. Перезагрузка
+                // раз в секунду перебрасывала бы журнал на первую
+                // страницу и теряла фильтры, поэтому интервал больше
+                // и на первой странице перезагрузка не нужна.
+                if (!isFirstLogPage) {
+                    refreshLogs();
+                }
             } else {
                 container.scrollTop += 50;
             }
-        }, 1000);
+        }, 5000);
     }
 }
 
@@ -473,7 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('keydown', function(e) {
         if (e.ctrlKey && e.key === 'f') {
             e.preventDefault();
-            document.getElementById('logSearch').focus();
+            document.querySelector('input[name="q"]').focus();
         }
     });
 });

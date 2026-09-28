@@ -57,14 +57,10 @@
                     {{ form.hidden_tag() }}
                     
                     <div class="mb-3">
-                        {{ form.backup_type.label(class="form-label") }}
-                        {{ form.backup_type(class="form-select") }}
-                    </div>
-                    
-                    <div class="mb-3">
-                        <div class="form-check">
-                            {{ form.include_files(class="form-check-input") }}
-                            {{ form.include_files.label(class="form-check-label") }}
+                        <label class="form-label">Тип копии</label>
+                        <input type="text" class="form-control" value="Полная (вся база данных)" readonly>
+                        <div class="form-text">
+                            Копия всегда полная: восстановление умеет вернуть только целую базу.
                         </div>
                     </div>
                     

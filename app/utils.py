@@ -130,7 +130,12 @@ def get_log_file_path():
 
 
 def read_log_lines(limit=1000, level=None, search=None):
-    """Читает последние строки журнала. Новые сверху."""
+    """Читает последние строки журнала. Новые сверху.
+
+    level — один уровень ('ERROR') или их набор (['INFO', 'WARNING']).
+    Всё равно читается только текущий app.log, ротированные app.log.N
+    не показываются.
+    """
     path = get_log_file_path()
     if not os.path.isfile(path):
         return []
@@ -142,14 +147,30 @@ def read_log_lines(limit=1000, level=None, search=None):
         return []
 
     if level:
-        needle = f'[{level}]'
-        lines = [line for line in lines if needle in line]
+        wanted = [level] if isinstance(level, str) else list(level)
+        needles = [f'[{name}]' for name in wanted]
+        lines = [line for line in lines
+                 if any(needle in line for needle in needles)]
     if search:
         needle = search.lower()
         lines = [line for line in lines if needle in line.lower()]
 
     lines.reverse()
     return lines[:limit] if limit else lines
+
+
+def clear_log_file():
+    """Очищает журнал, сохраняя сами обработчики работоспособными.
+
+    Файл не удаляется, а обрезается до нуля: иначе RotatingFileHandler
+    продолжил бы писать в удалённый дескриптор.
+    """
+    path = get_log_file_path()
+    if not os.path.isfile(path):
+        return False
+    with open(path, 'w', encoding='utf-8'):
+        pass
+    return True
 
 
 def count_logs_by_level(level):
@@ -228,19 +249,33 @@ def sanitize_filename(filename):
     filename = filename.strip(' ._')
     return filename if filename else 'report'
 
-def export_to_excel(data, filename_prefix):
-    """Экспорт данных в Excel с корректным путём и безопасным именем"""
+def export_to_excel(data, filename_prefix, fmt=None):
+    """Экспорт данных в Excel или CSV.
+
+    Формат берётся из настройки «Формат экспорта», если не задан явно.
+    Раньше выбор в настройках ни на что не влиял: всегда создавался .xlsx.
+    """
     df = pd.DataFrame(data)
-    
+
+    if fmt is None:
+        from app.models import SystemSettings
+        fmt = SystemSettings.get_settings().export_format or 'excel'
+    fmt = str(fmt).strip().lower()
+
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     safe_prefix = sanitize_filename(filename_prefix)
-    filename = f'{safe_prefix}_{timestamp}.xlsx'
-    
+    extension = 'csv' if fmt == 'csv' else 'xlsx'
+    filename = f'{safe_prefix}_{timestamp}.{extension}'
+
     os.makedirs(EXPORT_DIR, exist_ok=True)
     filepath = os.path.join(EXPORT_DIR, filename)
-    
-    df.to_excel(filepath, index=False, engine='openpyxl')
-    
+
+    if extension == 'csv':
+        # utf-8-sig: без BOM Excel открывает кириллицу как нечитаемый текст
+        df.to_csv(filepath, index=False, encoding='utf-8-sig')
+    else:
+        df.to_excel(filepath, index=False, engine='openpyxl')
+
     return filepath
 
 def format_date(date_obj):
@@ -248,6 +283,89 @@ def format_date(date_obj):
     if date_obj:
         return date_obj.strftime('%d.%m.%Y')
     return ''
+
+IMPORT_TEMPLATES = {
+    'students': {
+        'columns': ['Номер зачетки', 'ФИО', 'Группа', 'Дата рождения',
+                    'Email', 'Телефон', 'Пол', 'Статус'],
+        'sample': [['2023001', 'Иванов Иван Иванович', 'Группа 1', '01.01.2005',
+                    'ivanov@example.com', '+79991234567', 'M', 'active']],
+        'notes': [
+            '«Номер зачетки» обязателен и должен быть уникальным.',
+            '«ФИО» разбивается на фамилию, имя и отчество автоматически.',
+            '«Группа»: если группы ещё нет, она будет создана автоматически.',
+            '«Пол»: M или F, любой регистр.',
+            '«Дата рождения»: 01.01.2005 или 2005-01-01.',
+            'В режиме «Дополнить» записи с уже существующим номером зачётки '
+            'обновляются, в режиме «Заменить» все студенты удаляются перед импортом.',
+        ],
+    },
+    'groups': {
+        'columns': ['Название', 'Специальность', 'Год'],
+        'sample': [['Группа 1', '09.02.06 Программирование', 2023]],
+        'notes': [
+            '«Название» обязательно и должно быть уникальным.',
+            '«Год» — только число, например 2023.',
+        ],
+    },
+    'grades': {
+        'columns': ['Номер зачетки', 'Студент', 'Предмет', 'Оценка',
+                    'Тип оценки', 'Дата', 'Комментарий'],
+        'sample': [['2023001', 'Иванов Иван Иванович', 'Математика', '5',
+                    'exam', '01.09.2026', '']],
+        'notes': [
+            'Студент ищется по «Номеру зачетки», а если он пуст — по «ФИО».',
+            'Студент и предмет должны уже существовать в базе, иначе строка '
+            'пропускается с ошибкой.',
+            '«Оценка»: 5, 4, 3, 2, 4.5, зачет, незачет.',
+            'Дата: 01.09.2026 или 2026-09-01.',
+        ],
+    },
+    'settings': {
+        'columns': ['Название колледжа', 'Учебный год',
+                    'Максимум студентов в группе', 'Элементов на странице',
+                    'Цветовая тема', 'Формат экспорта'],
+        'sample': [['Технический колледж', '2024-2025', 25, 20, 'purple', 'excel']],
+        'notes': [
+            'Импортируется только первая строка файла.',
+            '«Цветовая тема»: purple, blue, green, orange, red.',
+            '«Формат экспорта»: excel или csv.',
+        ],
+    },
+}
+
+
+def build_import_template(import_type):
+    """Собирает .xlsx-шаблон для импорта: заголовки, пример строки,
+    лист с пояснениями. Возвращает (путь, имя файла)."""
+    spec = IMPORT_TEMPLATES.get(import_type)
+    if spec is None:
+        raise ValueError(f'Шаблон для типа «{import_type}» не поддерживается')
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'shablon_import_{import_type}_{timestamp}.xlsx'
+    filepath = os.path.join(EXPORT_DIR, filename)
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+
+    sheet_name = {'students': 'Студенты', 'groups': 'Группы',
+                  'grades': 'Оценки', 'settings': 'Настройки'}[import_type]
+
+    with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+        pd.DataFrame(spec['sample'], columns=spec['columns']).to_excel(
+            writer, sheet_name=sheet_name, index=False)
+        pd.DataFrame({'Пояснение': spec['notes']}).to_excel(
+            writer, sheet_name='Инструкция', index=False)
+
+        book = writer.book
+        data_sheet = book[sheet_name]
+        for index, column in enumerate(spec['columns'], start=1):
+            width = max(len(str(column)) + 2,
+                        *(len(str(row[index - 1])) + 2 for row in spec['sample']))
+            data_sheet.column_dimensions[
+                data_sheet.cell(row=1, column=index).column_letter].width = min(width, 45)
+        book['Инструкция'].column_dimensions['A'].width = 80
+
+    return filepath, filename
 
 def calculate_age(birth_date):
     """Вычисление возраста"""
@@ -258,26 +376,35 @@ def calculate_age(birth_date):
     return None
 
 # Остальные функции (без изменений)
-def create_backup(backup_type='full', include_files=False, description=''):
-    """Создание резервной копии"""
+def create_backup(description=''):
+    """Создание полной резервной копии: база + метаданные.
+
+    Параметры backup_type и include_files убраны. Тип копии попадал только
+    в имя файла — внутри архива всегда была вся база, поэтому «частичную»
+    копию нельзя было восстановить (restore_backup возвращает только
+    college.db). include_files ссылался на папку uploads, которую никто
+    никогда не заполнял.
+    """
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     backup_dir = get_backup_dir()
-    
-    backup_filename = f'backup_{timestamp}_{backup_type}.backup'
+
+    backup_filename = f'backup_{timestamp}_full.backup'
     backup_path = os.path.join(backup_dir, backup_filename)
     
     db_path = get_db_path()
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(f'Файл базы данных не найден: {db_path}')
+
     with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        if os.path.exists(db_path):
-            zipf.write(db_path, 'college.db')
+        zipf.write(db_path, 'college.db')
         metadata = {
-            'backup_type': backup_type,
+            'backup_type': 'full',
             'created_at': datetime.now().isoformat(),
             'description': description,
-            'include_files': include_files
+            'app_version': '1.0'
         }
-        metadata_str = json.dumps(metadata, indent=2, ensure_ascii=False)
-        zipf.writestr('metadata.json', metadata_str)
+        zipf.writestr('metadata.json',
+                      json.dumps(metadata, indent=2, ensure_ascii=False))
     
     return backup_filename
 
@@ -371,35 +498,486 @@ def restore_backup(backup_path):
 
     return True
 
-def import_from_file(file, import_type, import_mode='append'):
-    """Импорт данных из файла.
+def _resolve_columns(columns, aliases):
+    """Сопоставляет колонки файла с полями по синонимам.
 
-    Возвращает словарь с количеством прочитанных строк и текстом результата.
-    Фактическая запись в базу — см. Фазу 4.3 плана (import_from_file_real).
+    Возвращает {поле: индекс}. Колонки сопоставляются без учёта регистра и
+    лишних пробелов, чтобы файл, выгруженный самим приложением, и файл,
+    заполненный вручную, читались одинаково.
     """
-    filename = file.filename
+    lookup = {str(c).strip().lower(): i for i, c in enumerate(columns)}
+    resolved = {}
+    for field, names in aliases.items():
+        for name in names:
+            if name in lookup:
+                resolved[field] = lookup[name]
+                break
+    return resolved
 
-    if filename.lower().endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(file)
-    elif filename.lower().endswith('.csv'):
-        df = pd.read_csv(file)
+
+def _cell(row, index, default=''):
+    """Значение ячейки как строка.
+
+    Важно: pandas читает колонку, где почти все значения — числа, а одна
+    ячейка пуста, как float. Тогда номер зачётки '9900001' превратился бы в
+    '9900001.0'. Целые float приводим к int, чтобы идентификаторы и годы
+    сохранялись в том виде, в каком их вводили.
+    """
+    value = row[index]
+    if value is None:
+        return default
+    if isinstance(value, float):
+        if pd.isna(value):
+            return default
+        if value.is_integer():
+            return str(int(value))
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    return text or default
+
+
+def _parse_date(value):
+    """Дата из '25.09.2026', '2026-09-25' или datetime/date. None если не разобрать."""
+    if value in (None, ''):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, 'year') and hasattr(value, 'day'):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ('%d.%m.%Y', '%Y-%m-%d', '%d/%m/%Y', '%Y/%m/%d', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    try:
+        parsed = pd.to_datetime(text, dayfirst=True, errors='raise')
+        return parsed.date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _split_full_name(full_name):
+    """'Иванов Иван Иванович' -> ('Иванов', 'Иван', 'Иванович')."""
+    parts = (full_name or '').split()
+    if not parts:
+        return '', '', ''
+    if len(parts) == 1:
+        return parts[0], '', ''
+    return parts[0], parts[1], ' '.join(parts[2:])
+
+
+STUDENT_ALIASES = {
+    'student_id': ('номер зачетки', 'номер зачётки', '№ зачетки', 'student_id',
+                   'номер студента', 'зачетка', 'зачётка'),
+    'last_name': ('фамилия', 'last_name'),
+    'first_name': ('имя', 'first_name'),
+    'patronymic': ('отчество', 'patronymic'),
+    'full_name': ('фио', 'фио студента', 'full_name', 'студент'),
+    'group': ('группа', 'group'),
+    'birth_date': ('дата рождения', 'birth_date', 'рождение'),
+    'email': ('email', 'почта', 'эл. почта', 'электронная почта'),
+    'phone': ('телефон', 'phone'),
+    'gender': ('пол', 'gender'),
+    'status': ('статус', 'status'),
+}
+
+GROUP_ALIASES = {
+    'name': ('название', 'имя группы', 'name', 'группа'),
+    'specialty': ('специальность', 'специалитет', 'specialty'),
+    'year': ('год', 'год поступления', 'year', 'курс'),
+}
+
+GRADE_ALIASES = {
+    'student_id': ('номер зачетки', 'номер зачётки', 'student_id', 'зачетка', 'зачётка'),
+    'student': ('студент', 'фио', 'фио студента'),
+    'subject': ('предмет', 'дисциплина', 'subject'),
+    'grade_value': ('оценка', 'балл', 'grade_value', 'значение'),
+    'grade_type': ('тип оценки', 'тип', 'grade_type'),
+    'date': ('дата', 'дата оценки', 'date'),
+    'comments': ('комментарий', 'комментарии', 'примечание', 'comments'),
+}
+
+SETTINGS_ALIASES = {
+    'college_name': ('название колледжа', 'колледж', 'college_name'),
+    'academic_year': ('учебный год', 'год', 'academic_year'),
+    'max_students_per_group': ('максимум студентов в группе', 'max_students_per_group'),
+    'items_per_page': ('элементов на странице', 'items_per_page'),
+    'theme_color': ('цветовая тема', 'тема', 'theme_color'),
+    'export_format': ('формат экспорта', 'export_format'),
+}
+
+
+def import_students(df, import_mode, errors):
+    """Импорт студентов. Возвращает число добавленных/обновлённых записей."""
+    from app.models import Student, Group, Grade, db
+
+    cols = _resolve_columns(df.columns, STUDENT_ALIASES)
+    if 'student_id' not in cols and 'full_name' not in cols:
+        raise ValueError('Не найдена колонка с номером зачётки или ФИО. '
+                         'Ожидаются «Номер зачетки» и/или «ФИО».')
+
+    if import_mode == 'replace':
+        for s in Student.query.all():
+            for g in s.grades:
+                db.session.delete(g)
+            db.session.delete(s)
+        db.session.flush()
+
+    groups_cache = {g.name.strip().lower(): g for g in Group.query.all()}
+    touched = 0
+
+    for number, row in df.iterrows():
+        line = int(number) + 2  # +1 — заголовок, +1 — нумерация с единицы
+        try:
+            student_id = _cell(row, cols['student_id']) if 'student_id' in cols else ''
+            full_name = _cell(row, cols['full_name']) if 'full_name' in cols else ''
+            last_name = _cell(row, cols['last_name']) if 'last_name' in cols else ''
+            first_name = _cell(row, cols['first_name']) if 'first_name' in cols else ''
+            patronymic = _cell(row, cols['patronymic']) if 'patronymic' in cols else ''
+
+            if not last_name and full_name:
+                last_name, first_name, patronymic = _split_full_name(full_name)
+            if not last_name:
+                raise ValueError('не указана фамилия')
+            if not student_id:
+                raise ValueError('не указан номер зачётки')
+
+            group = None
+            if 'group' in cols and _cell(row, cols['group']):
+                group_name = _cell(row, cols['group'])
+                group = groups_cache.get(group_name.lower())
+                if group is None:
+                    group = Group(name=group_name)
+                    db.session.add(group)
+                    db.session.flush()
+                    groups_cache[group_name.lower()] = group
+
+            gender = _cell(row, cols['gender']) if 'gender' in cols else ''
+            if gender:
+                gender = gender[0].upper()
+                if gender not in ('M', 'F'):
+                    gender = 'M'
+            else:
+                gender = 'M'
+
+            values = {
+                'last_name': last_name,
+                'first_name': first_name or '-',
+                'patronymic': patronymic,
+                'group': group,
+                'birth_date': _parse_date(_cell(row, cols['birth_date']))
+                if 'birth_date' in cols else None,
+                'email': _cell(row, cols['email']) if 'email' in cols else '',
+                'phone': _cell(row, cols['phone']) if 'phone' in cols else '',
+                'gender': gender,
+                'status': (_cell(row, cols['status']) if 'status' in cols else '') or 'active',
+            }
+
+            student = Student.query.filter_by(student_id=str(student_id).strip()).first()
+            if student is None:
+                student = Student(student_id=str(student_id).strip())
+                db.session.add(student)
+            for field, value in values.items():
+                setattr(student, field, value)
+            touched += 1
+        except ValueError as e:
+            errors.append(f'Строка {line}: {e}')
+        except Exception as e:
+            db.session.rollback()
+            errors.append(f'Строка {line}: {type(e).__name__}: {e}')
+
+    return touched
+
+
+def import_groups(df, import_mode, errors):
+    """Импорт групп."""
+    from app.models import Group, db
+
+    cols = _resolve_columns(df.columns, GROUP_ALIASES)
+    if 'name' not in cols:
+        raise ValueError('Не найдена колонка с названием группы.')
+
+    if import_mode == 'replace':
+        for g in Group.query.all():
+            db.session.delete(g)
+        db.session.flush()
+
+    touched = 0
+    for number, row in df.iterrows():
+        line = int(number) + 2
+        try:
+            name = _cell(row, cols['name'])
+            if not name:
+                raise ValueError('не указано название группы')
+            year_text = _cell(row, cols['year']) if 'year' in cols else ''
+            year = int(re.sub(r'\D', '', year_text)[:4]) if re.sub(r'\D', '', year_text) else None
+
+            group = Group.query.filter_by(name=name).first()
+            if group is None:
+                group = Group(name=name)
+                db.session.add(group)
+            group.specialty = (_cell(row, cols['specialty'])
+                              if 'specialty' in cols else '') or None
+            if year:
+                group.year = year
+            touched += 1
+        except ValueError as e:
+            errors.append(f'Строка {line}: {e}')
+        except Exception as e:
+            db.session.rollback()
+            errors.append(f'Строка {line}: {type(e).__name__}: {e}')
+
+    return touched
+
+
+def import_grades(df, import_mode, errors):
+    """Импорт оценок. Студент ищется по номеру зачётки, иначе по ФИО."""
+    from app.models import Grade, Student, Subject, db
+
+    cols = _resolve_columns(df.columns, GRADE_ALIASES)
+    if 'grade_value' not in cols or 'subject' not in cols:
+        raise ValueError('Нужны колонки «Предмет» и «Оценка» (или «Номер зачётки»).')
+
+    if import_mode == 'replace':
+        for g in Grade.query.all():
+            db.session.delete(g)
+        db.session.flush()
+
+    students_cache = {}
+    for s in Student.query.all():
+        students_cache[s.student_id] = s
+        students_cache[s.full_name.lower()] = s
+        students_cache[' '.join(s.full_name.split()).lower()] = s
+
+    subjects_cache = {sub.name.strip().lower(): sub for sub in Subject.query.all()}
+    touched = 0
+
+    for number, row in df.iterrows():
+        line = int(number) + 2
+        try:
+            subject_name = _cell(row, cols['subject'])
+            if not subject_name:
+                raise ValueError('не указан предмет')
+            subject = subjects_cache.get(subject_name.lower())
+            if subject is None:
+                raise ValueError(f'предмет «{subject_name}» не найден в базе')
+
+            key = ''
+            if 'student_id' in cols and _cell(row, cols['student_id']):
+                key = _cell(row, cols['student_id'])
+            elif 'student' in cols and _cell(row, cols['student']):
+                key = _cell(row, cols['student'])
+            if not key:
+                raise ValueError('не указан студент')
+
+            student = students_cache.get(key) or students_cache.get(key.lower())
+            if student is None:
+                raise ValueError(f'студент «{key}» не найден в базе')
+
+            raw_value = _cell(row, cols['grade_value'])
+            if grade_to_points(raw_value) is None:
+                raise ValueError(f'некорректное значение оценки «{raw_value}»')
+
+            grade_type = (_cell(row, cols['grade_type'])
+                          if 'grade_type' in cols else '') or 'exam'
+
+            grade = Grade(
+                student_id=student.id,
+                subject_id=subject.id,
+                grade_value=str(raw_value),
+                grade_type=grade_type,
+                date=_parse_date(_cell(row, cols['date'])) if 'date' in cols else None,
+                comments=(_cell(row, cols['comments'])
+                          if 'comments' in cols else '') or None
+            )
+            db.session.add(grade)
+            touched += 1
+        except ValueError as e:
+            errors.append(f'Строка {line}: {e}')
+        except Exception as e:
+            db.session.rollback()
+            errors.append(f'Строка {line}: {type(e).__name__}: {e}')
+
+    return touched
+
+
+def import_settings(df, import_mode, errors):
+    """Импорт настроек: берётся первая строка файла."""
+    from app.models import SystemSettings
+
+    if df.empty:
+        raise ValueError('Файл пуст.')
+
+    cols = _resolve_columns(df.columns, SETTINGS_ALIASES)
+    if not cols:
+        raise ValueError('Не найдено ни одного поля настроек. Ожидаются '
+                         '«Название колледжа», «Учебный год» и другие.')
+
+    row = df.iloc[0]
+    settings = SystemSettings.get_settings()
+    if import_mode == 'replace':
+        settings = SystemSettings.reset_to_default()
+
+    for field, index in cols.items():
+        raw = _cell(row, index)
+        current = getattr(settings, field, None)
+        try:
+            if isinstance(current, bool):
+                setattr(settings, field, raw.lower() in ('1', 'true', 'да', 'yes', 'on'))
+            elif isinstance(current, int):
+                setattr(settings, field, int(re.sub(r'\D', '', raw) or current))
+            elif raw:
+                setattr(settings, field, raw)
+        except (TypeError, ValueError):
+            errors.append(f'Поле «{field}»: значение «{raw}» не подходит, пропущено')
+
+    return 1
+
+
+IMPORTERS = {
+    'students': import_students,
+    'groups': import_groups,
+    'grades': import_grades,
+    'settings': import_settings,
+}
+
+
+def _count_valid_students(df):
+    cols = _resolve_columns(df.columns, STUDENT_ALIASES)
+    if 'student_id' not in cols and 'full_name' not in cols:
+        raise ValueError('Не найдена колонка с номером зачётки или ФИО. '
+                         'Ожидаются «Номер зачетки» и/или «ФИО».')
+    valid = 0
+    for _, row in df.iterrows():
+        student_id = _cell(row, cols['student_id']) if 'student_id' in cols else ''
+        last_name = _cell(row, cols['last_name']) if 'last_name' in cols else ''
+        full_name = _cell(row, cols['full_name']) if 'full_name' in cols else ''
+        if not last_name and full_name:
+            last_name = _split_full_name(full_name)[0]
+        if student_id and last_name:
+            valid += 1
+    return valid
+
+
+def _count_valid_groups(df):
+    cols = _resolve_columns(df.columns, GROUP_ALIASES)
+    if 'name' not in cols:
+        raise ValueError('Не найдена колонка с названием группы.')
+    return sum(1 for _, row in df.iterrows() if _cell(row, cols['name']))
+
+
+def _count_valid_grades(df):
+    cols = _resolve_columns(df.columns, GRADE_ALIASES)
+    if 'grade_value' not in cols or 'subject' not in cols:
+        raise ValueError('Нужны колонки «Предмет» и «Оценка» (или «Номер зачётки»).')
+
+    from app.models import Student, Subject
+
+    students = set()
+    for s in Student.query.all():
+        students.add(s.student_id)
+        students.add(s.full_name.lower())
+    subjects = {sub.name.strip().lower() for sub in Subject.query.all()}
+
+    valid = 0
+    for _, row in df.iterrows():
+        subject = _cell(row, cols['subject'])
+        value = _cell(row, cols['grade_value'])
+        key = _cell(row, cols['student_id']) if 'student_id' in cols else ''
+        if not key and 'student' in cols:
+            key = _cell(row, cols['student'])
+        if (subject and subject.lower() in subjects and key
+                and (key in students or key.lower() in students)
+                and grade_to_points(value) is not None):
+            valid += 1
+    return valid
+
+
+PRECHECKS = {
+    'students': _count_valid_students,
+    'groups': _count_valid_groups,
+    'grades': _count_valid_grades,
+}
+
+IMPORT_TITLES = {
+    'students': 'студенты',
+    'groups': 'группы',
+    'grades': 'оценки',
+    'settings': 'настройки',
+}
+
+
+def import_from_file(file, import_type='students', import_mode='append', **kwargs):
+    """Импорт данных из Excel/CSV в базу.
+
+    Ищет колонки по синонимам, проверяет каждую строку и возвращает отчёт
+    с числом импортированных записей и списком ошибок. Часть строк может
+    не пройти — валидные всё равно импортируются.
+
+    Раньше функция только считала строки файла и ничего не записывала.
+    """
+    from app.init_ import db
+
+    if import_type not in IMPORTERS:
+        raise ValueError(f'Неизвестный тип импорта: {import_type}')
+
+    filename = file.filename or ''
+    lower = filename.lower()
+    try:
+        if lower.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(file)
+        elif lower.endswith('.csv'):
+            df = pd.read_csv(file)
+        else:
+            raise ValueError('Неподдерживаемый формат. Допустимы .xlsx, .xls, .csv')
+    finally:
+        if hasattr(file, 'stream') and hasattr(file.stream, 'seek'):
+            file.stream.seek(0)
+
+    if df.empty:
+        raise ValueError('Файл не содержит строк с данными.')
+
+    errors = []
+    touched = 0
+
+    # В режиме замены сначала проверяем файл. Без этой проверки совершенно
+    # неверный файл (перепутанные столбцы, чужие студенты) удалял бы текущие
+    # данные и не импортировал бы ничего взамен.
+    if import_mode == 'replace':
+        precheck = PRECHECKS.get(import_type)
+        if precheck is not None and precheck(df) == 0:
+            raise ValueError(
+                'В файле нет ни одной корректной строки, поэтому текущие данные '
+                'не тронуты. Проверьте названия столбцов и значения.')
+
+    try:
+        touched = IMPORTERS[import_type](df, import_mode, errors)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+
+    title = IMPORT_TITLES.get(import_type, 'данные')
+    if not errors:
+        message = f'Импортировано записей: {touched} ({title})'
     else:
-        raise ValueError('Неподдерживаемый формат файла. Допустимы .xlsx, .xls, .csv')
-
-    titles = {
-        'students': 'студентов',
-        'grades': 'оценок',
-        'groups': 'групп',
-        'settings': 'настроек',
-    }
-    title = titles.get(import_type, 'записей')
+        message = (f'Импортировано записей: {touched} ({title}), '
+                   f'пропущено строк с ошибками: {len(errors)}')
 
     return {
-        'count': len(df),
+        'count': touched,
+        'skipped': len(errors),
         'type': import_type,
         'mode': import_mode,
         'columns': list(df.columns),
-        'message': f'Прочитано строк: {len(df)} ({title})',
+        'errors': errors[:100],
+        'errors_total': len(errors),
+        'message': message,
     }
 
 def validate_email(email):

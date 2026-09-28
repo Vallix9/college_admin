@@ -70,6 +70,14 @@ PAGES = [
     ('/settings', 'настройки'),
     ('/settings/backup', 'резервные копии'),
     ('/settings/import', 'импорт данных'),
+    ('/settings/logs', 'журнал событий'),
+    ('/settings/logs?level=ERROR', 'журнал: только ошибки'),
+    ('/settings/logs?q=%D0%98%D0%B2%D0%B0%D0%BD', 'журнал: поиск'),
+    ('/settings/export-template/students', 'шаблон импорта: студенты'),
+    ('/settings/export-template/grades', 'шаблон импорта: оценки'),
+    ('/settings/export-template/groups', 'шаблон импорта: группы'),
+    ('/settings/export-template/settings', 'шаблон импорта: настройки'),
+    ('/api/system/download-logs', 'скачивание журнала'),
     ('/health', 'health-check'),
 ]
 

@@ -100,11 +100,11 @@ class SettingsForm(FlaskForm):
                                  validators=[DataRequired(), NumberRange(min=5, max=100)])
     
     # Настройки экспорта
+    # 'pdf' убран: экспорт в PDF не реализован, и выбор молча ничего не делал
     export_format = SelectField('Формат экспорта по умолчанию', 
                                choices=[
                                    ('excel', 'Excel (.xlsx)'),
-                                   ('csv', 'CSV'),
-                                   ('pdf', 'PDF')
+                                   ('csv', 'CSV')
                                ])
     
     # Настройки уведомлений
@@ -120,16 +120,11 @@ class SettingsForm(FlaskForm):
                                       ('monthly', 'Ежемесячно')
                                   ])
     
-    # Смена пароля (опционально)
+    # Смена пароля (необязательно — заполняется только при смене)
     current_password = PasswordField('Текущий пароль', validators=[Optional()])
     new_password = PasswordField('Новый пароль', validators=[Optional(), Length(min=6, max=100)])
-    confirm_password = PasswordField('Подтвердите пароль', 
+    confirm_password = PasswordField('Подтвердите новый пароль', 
                                      validators=[EqualTo('new_password', message='Пароли должны совпадать')])
-    
-    # Дополнительные настройки
-    show_welcome_message = BooleanField('Показывать приветственное сообщение')
-    enable_export_logging = BooleanField('Вести журнал экспорта')
-    enable_grade_alerts = BooleanField('Оповещения о новых оценках')
     
     submit = SubmitField('Сохранить настройки')
     reset = SubmitField('Сбросить к значениям по умолчанию')
@@ -141,16 +136,17 @@ class SettingsForm(FlaskForm):
             raise ValidationError('Текущий пароль указан неверно')
 
 class BackupForm(FlaskForm):
-    """Форма для ручного резервного копирования"""
-    backup_type = SelectField('Тип резервной копии', 
-                             choices=[
-                                 ('full', 'Полная резервная копия'),
-                                 ('students', 'Только студенты'),
-                                 ('grades', 'Только оценки'),
-                                 ('settings', 'Только настройки')
-                             ])
-    include_files = BooleanField('Включать загруженные файлы')
-    description = StringField('Описание (необязательно)', 
+    """Форма для ручного резервного копирования.
+
+    Раньше здесь были выбор типа копии (только студенты / только оценки /
+    только настройки) и галочка «включать загруженные файлы». Оба поля были
+    обманкой: тип копии попадал только в имя файла, внутри архива всегда лежала
+    вся база, а восстановление умеет вернуть только college.db — то есть
+    «частичную» копию было бы невозможно восстановить. Папка uploads, откуда
+    брались «файлы», никогда не заполнялась. Оставлено одно полноценное
+    полное копирование.
+    """
+    description = StringField('Описание (необязательно)',
                              validators=[Optional(), Length(max=200)])
     submit = SubmitField('Создать резервную копию')
 
@@ -171,3 +167,13 @@ class ImportForm(FlaskForm):
                                  ('replace', 'Заменить существующие')
                              ])
     submit = SubmitField('Импортировать данные')
+
+
+class ClearLogsForm(FlaskForm):
+    """Форма для очистки журнала событий.
+
+    Нужна потому, что глобальный CSRFProtect в проекте не включён: токен
+    проверяет только сам FlaskForm. Эндпоинт очистки принимает POST без
+    формы, поэтому без неё он остался бы без защиты.
+    """
+    submit = SubmitField('Очистить журнал')
