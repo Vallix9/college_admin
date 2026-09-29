@@ -588,7 +588,11 @@ def delete_group(id):
 @staff_required
 def subjects():
     """Список предметов. Преподаватель видит только свои."""
-    subjects_list = visible_subjects_query().order_by(Subject.name).all()
+    # teacher подгружается вместе со строкой: в таблице он выводится для
+    # каждого предмета, и без joinedload это отдельный SELECT на предмет
+    subjects_list = (visible_subjects_query()
+                     .options(joinedload(Subject.teacher))
+                     .order_by(Subject.name).all())
     return render_template('subjects.html', subjects=subjects_list,
                            grade_counts=subject_grade_counts())
 

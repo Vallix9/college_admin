@@ -84,6 +84,8 @@ def prepare():
         # Чистим возможные остатки прошлого прогона
         stale = User.query.filter_by(username=TEST_TEACHER).first()
         if stale:
+            for subject in Subject.query.filter_by(teacher_id=stale.id).all():
+                db.session.delete(subject)
             db.session.delete(stale)
             db.session.commit()
 
@@ -93,16 +95,25 @@ def prepare():
         db.session.add(teacher)
         db.session.commit()
 
-        # Отдаём преподавателю два предмета, остальные оставляем чужими
-        subjects = Subject.query.order_by(Subject.id).limit(2).all()
-        for subject in subjects:
+        # Тестовые предметы — свои, а не чужие. Сид раздаёт все 8 предметов
+        # демо-преподавателям; если бы тест отбирал существующие и не сумел
+        # вернуть их из-за падения, база осталась бы с чужими данными.
+        subjects = []
+        for index in (1, 2):
+            subject = Subject(name=f'Тестовый предмет {index}', hours=2)
             subject.teacher_id = teacher.id
+            db.session.add(subject)
+            subjects.append(subject)
         db.session.commit()
 
-        # Учётная запись студента: берём первого активного и выдаём ему пароль
+        # Учётная запись студента: берём того, у кого её ещё нет.
+        # Часть аккаунтов выдаёт init_db.py, поэтому «просто первого»
+        # здесь означало бы попытку создать логин, который уже занят.
         student = (Student.query
-                   .filter_by(status='active')
+                   .filter_by(status='active', user_id=None)
                    .order_by(Student.id).first())
+        if student is None:
+            raise RuntimeError('Нет студента без учётной записи — нечего проверять')
         user = User(username=student.student_id, full_name=student.full_name,
                     role=User.ROLE_STUDENT, is_active=True)
         user.set_password(STUDENT_PASSWORD)
@@ -111,24 +122,29 @@ def prepare():
         student.user_id = user.id
         db.session.commit()
 
-        # Предмет, который остался за кем-то другим: на нём проверяем 403
+        # Чужой предмет — тот, что ведёт не наш преподаватель. Раньше искали
+        # предмет без преподавателя, но после сида таких не осталось.
         foreign = (Subject.query
-                   .filter(Subject.teacher_id.is_(None))
+                   .filter(Subject.teacher_id.isnot(None),
+                           Subject.teacher_id != teacher.id)
                    .order_by(Subject.id).first())
+        if foreign is None:
+            raise RuntimeError('Нет чужого предмета — нечего проверять 403')
 
         return {'teacher_id': teacher.id,
                 'teacher_name': teacher.username,
                 'student_login': student.student_id,
                 'subject_ids': [s.id for s in subjects],
-                'foreign_subject': foreign.id if foreign else None}
+                'foreign_subject': foreign.id}
 
 
 def cleanup(ids):
+    """Возвращает базу к исходному состоянию."""
     with app.app_context():
         user = User.query.filter_by(username=ids['teacher_name']).first()
         if user:
-            for subject in user.subjects:
-                subject.teacher_id = None
+            for subject in Subject.query.filter_by(teacher_id=user.id).all():
+                db.session.delete(subject)
             db.session.delete(user)
         student = Student.query.filter_by(
             student_id=ids['student_login']).first()

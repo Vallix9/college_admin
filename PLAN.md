@@ -217,26 +217,26 @@
 > Все новые таблицы — в `app/models.py`. `college.db` на этом этапе ещё пустой,
 > но добавить идемпотентную миграцию, чтобы скрипт не падал на уже существующей базе.
 
-- [ ] 6.1 `AcademicPeriod` — период: `name` («I четверть», «II семестр»), `academic_year`,
+- [x] 6.1 `AcademicPeriod` — период: `name` («I четверть», «II семестр»), `academic_year`,
       `start_date`, `end_date`, `sort_order`, `is_annual`.
-- [ ] 6.2 `ScheduleItem` — расписание: `group_id`, `subject_id`, `day_of_week` (1–7),
+- [x] 6.2 `ScheduleItem` — расписание: `group_id`, `subject_id`, `day_of_week` (1–7),
       `lesson_number` (1–8), `teacher_id`, `room`; уникальность
       (`group_id`, `day_of_week`, `lesson_number`).
-- [ ] 6.3 `AttendanceRecord` — пропуск: `student_id`, `date`, `reason`
+- [x] 6.3 `AttendanceRecord` — пропуск: `student_id`, `date`, `reason`
       (`illness` / `excused` / `unexcused`), `subject_id` (необязательно), `note`,
       `created_at`, `created_by`; индекс (`student_id`, `date`).
-- [ ] 6.4 `GradeHistory` — правки оценок: `grade_id`, `old_value`, `new_value`,
+- [x] 6.4 `GradeHistory` — правки оценок: `grade_id`, `old_value`, `new_value`,
       `changed_at`, `changed_by`, `comment`.
-- [ ] 6.5 Расширить `Grade`: `period_id` (FK), индексы (`subject_id`, `date`)
+- [x] 6.5 Расширить `Grade`: `period_id` (FK), индексы (`subject_id`, `date`)
       и (`student_id`, `subject_id`) — без них сетка журнала даёт N+1 на каждую ячейку.
-- [ ] 6.6 **Учётные записи студентов:** `Student.user_id` → `User.id` (unique, nullable,
+- [x] 6.6 **Учётные записи студентов:** `Student.user_id` → `User.id` (unique, nullable,
       чтобы старые студенты без аккаунта не ломали сид).
-- [ ] 6.7 Расширить `User`: `password_changed_at`, `last_login_at`, `is_active`,
+- [x] 6.7 Расширить `User`: `password_changed_at`, `last_login_at`, `is_active`,
       `created_by`. Поле `must_change_password` **не** добавляем — смена по желанию.
-- [ ] 6.8 Идемпотентная миграция: добавляет недостающие таблицы и колонки
+- [x] 6.8 Идемпотентная миграция: добавляет недостающие таблицы и колонки
       (`ALTER TABLE ... ADD COLUMN`), не падает повторно.
-- [ ] 6.9 Пересоздать `college.db`, залить сид, проверить целостность.
-- [ ] **КТ:** в схеме есть все 4 новые таблицы + новые колонки; повторный запуск миграции
+- [x] 6.9 Пересоздать `college.db`, залить сид, проверить целостность.
+- [x] **КТ:** в схеме есть все 4 новые таблицы + новые колонки; повторный запуск миграции
       не падает; сид создаёт студентов, часть из них с `user_id`.
 
 ## Фаза 7. Учебные периоды и расписание
