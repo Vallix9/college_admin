@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ home_url() }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.staff') }}">Сотрудники</a></li>
+<li class="breadcrumb-item active">{{ title }}</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-person-gear me-2"></i>{{ title }}
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Учётная запись</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            {{ form.username.label(class="form-label") }}
+                            {% if user %}
+                                <input type="text" class="form-control" value="{{ user.username }}" disabled>
+                                <div class="form-text">Логин нельзя изменить: на него записаны все действия сотрудника</div>
+                            {% else %}
+                                {{ form.username(class="form-control", placeholder="ivanov") }}
+                            {% endif %}
+                            {% for error in form.username.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="col-md-6">
+                            {{ form.role.label(class="form-label") }}
+                            {{ form.role(class="form-select") }}
+                            {% for error in form.role.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="col-md-12">
+                            {{ form.full_name.label(class="form-label") }}
+                            {{ form.full_name(class="form-control", placeholder="Иванов Иван Иванович") }}
+                            {% for error in form.full_name.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="col-md-12">
+                            {{ form.email.label(class="form-label") }}
+                            {{ form.email(class="form-control", placeholder="ivanov@college.ru") }}
+                            {% for error in form.email.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        {% if not user %}
+                        <div class="col-md-6">
+                            {{ form.password.label(class="form-label") }}
+                            {{ form.password(class="form-control", placeholder="Не менее 6 символов") }}
+                            {% for error in form.password.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="col-md-6">
+                            {{ form.confirm_password.label(class="form-label") }}
+                            {{ form.confirm_password(class="form-control", placeholder="Повторите пароль") }}
+                            {% for error in form.confirm_password.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <div class="col-md-12">
+                            <div class="form-check form-switch">
+                                {{ form.is_active(class="form-check-input") }}
+                                {{ form.is_active.label(class="form-check-label") }}
+                            </div>
+                            <div class="form-text">
+                                Заблокированный сотрудник не может войти, но его история действий сохраняется
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer d-flex justify-content-between">
+                    <a href="{{ url_for('main.staff') }}" class="btn btn-secondary">
+                        <i class="bi bi-x-circle"></i> Отмена
+                    </a>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-circle"></i> Сохранить
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        {% if user %}
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Назначенные предметы</h5>
+            </div>
+            <div class="card-body">
+                {% if user.subjects %}
+                    <ul class="mb-0">
+                        {% for subject in user.subjects %}
+                        <li>{{ subject.name }} <span class="text-muted">— {{ subject.hours }} ч</span></li>
+                        {% endfor %}
+                    </ul>
+                    <div class="form-text mt-2">
+                        Сначала снимите сотрудника с предметов, иначе удалить запись нельзя
+                    </div>
+                {% else %}
+                    <span class="text-muted">Предметы не назначены</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

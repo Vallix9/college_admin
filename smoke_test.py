@@ -39,11 +39,17 @@ with app.app_context():
     admin_name = os.environ.get('ADMIN_USERNAME', 'admin')
 
 CSRF_RE = re.compile(r'name="csrf_token"[^>]*value="([^"]+)"')
-LOGIN_MARK = 'name="password"'
 
 
-def is_login_page(body):
-    return LOGIN_MARK in body and 'csrf_token' in body
+def is_login_page(resp):
+    """Открылась ли вместо запрошенной страницы форма входа.
+
+    Сверяем конечный адрес: неудачный вход тоже оставляет нас на /login,
+    а защищённый раздел перенаправляет туда же. Признаки в теле шаблона
+    для этой проверки не годились — на странице сотрудников есть и логин,
+    и пароль, и токен, и она принималась за форму входа.
+    """
+    return resp.request.path.rstrip('/') == '/login'
 
 
 def extract_csrf(html):
@@ -65,8 +71,11 @@ PAGES = [
     ('/grades', 'журнал оценок (старый)'),
     ('/grades/add', 'добавление оценки'),
     ('/reports', 'отчёты'),
-    ('/reports/students', 'экспорт студентов в Excel'),
-    (f'/reports/group/{group_id}', 'экспорт группы в Excel'),
+    ('/reports/students', 'отчёт по студентам в Excel'),
+    (f'/reports/group/{group_id}', 'отчёт по группе в Excel'),
+    ('/staff', 'сотрудники'),
+    ('/staff/add', 'создание сотрудника'),
+    ('/my/password', 'смена собственного пароля'),
     ('/settings', 'настройки'),
     ('/settings/backup', 'резервные копии'),
     ('/settings/import', 'импорт данных'),
@@ -107,7 +116,7 @@ def main():
             failures.append(('ВХОД', response.status_code))
             print('✗ Не удалось войти в систему')
             return finish(failures)
-        if is_login_page(body):
+        if is_login_page(response):
             print('✗ Вход не состоялся: сервер вернул форму входа (проверьте пароль ADMIN_PASSWORD)')
             return 1
 
@@ -148,7 +157,7 @@ def main():
             elif 'Internal Server Error' in body:
                 failures.append((url, '500 внутри'))
                 print(f'✗ {url:42} {title:32} внутренняя ошибка')
-            elif is_login_page(body):
+            elif is_login_page(resp):
                 failures.append((url, 'редирект на страницу входа'))
                 print(f'✗ {url:42} {title:32} открывает форму входа вместо страницы')
             else:

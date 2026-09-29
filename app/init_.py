@@ -55,5 +55,72 @@ def create_app(config_class='config.Config'):
             'grade_to_points': grade_to_points,
             'average_grade': average_grade
         }
-    
+
+    # home_url() живёт в routes, но нужен почти каждому шаблону: и меню,
+    # и страница 403, и редирект после входа
+    @app.context_processor
+    def navigation_processor():
+        from app.routes import home_url
+        return {'home_url': home_url}
+
+    # Список пунктов меню с учётом роли. Собирается здесь, а не в шаблоне,
+    # чтобы условия видимости были в одном месте и к ним легко было вернуться
+    @app.context_processor
+    def menu_processor():
+        from flask_login import current_user
+        return {'nav_items': nav_items_for(current_user),
+                'system_items': system_items_for(current_user),
+                'can_manage_data': current_user.is_authenticated
+                and current_user.can_manage_data}
+
+
     return app
+
+
+def nav_items_for(user):
+    """Пункты бокового меню, доступные пользователю с текущей ролью.
+
+    Студент видит только свой кабинет, преподаватель — учебные разделы без
+    обслуживания системы, администратор — всё.
+    """
+    if not user.is_authenticated:
+        return []
+
+    is_admin = user.is_admin
+    is_student = user.is_student
+
+    if is_student:
+        return [{'endpoint': 'main.my_account', 'icon': 'bi-person-badge',
+                 'label': 'Мой кабинет'}]
+
+    items = [
+        {'endpoint': 'main.dashboard', 'icon': 'bi-speedometer2',
+         'label': 'Дашборд'},
+        {'endpoint': 'main.students', 'icon': 'bi-people', 'label': 'Студенты'},
+        {'endpoint': 'main.groups', 'icon': 'bi-collection', 'label': 'Группы'},
+        {'endpoint': 'main.subjects', 'icon': 'bi-book', 'label': 'Предметы'},
+        {'endpoint': 'main.grades', 'icon': 'bi-journal-check', 'label': 'Оценки'},
+        {'endpoint': 'main.reports', 'icon': 'bi-file-earmark-bar-graph',
+         'label': 'Отчёты'},
+    ]
+
+    if is_admin:
+        items.append({'endpoint': 'main.staff', 'icon': 'bi-person-gear',
+                      'label': 'Сотрудники'})
+
+    return items
+
+
+def system_items_for(user):
+    """Пункты блока обслуживания системы — только для администратора."""
+    if not user.is_authenticated or not user.is_admin:
+        return []
+    return [
+        {'endpoint': 'main.settings', 'icon': 'bi-gear', 'label': 'Настройки'},
+        {'endpoint': 'main.settings_backup', 'icon': 'bi-hdd',
+         'label': 'Резервные копии'},
+        {'endpoint': 'main.settings_import', 'icon': 'bi-file-earmark-arrow-up',
+         'label': 'Импорт данных'},
+        {'endpoint': 'main.view_logs', 'icon': 'bi-journal-text',
+         'label': 'Журнал событий'},
+    ]

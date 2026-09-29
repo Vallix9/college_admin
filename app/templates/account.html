@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}Мой кабинет{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active">Мой кабинет</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-person-badge me-2"></i>{{ student.full_name if student else current_user.display_name }}
+{% endblock %}
+
+{% block page_subtitle %}
+{{ current_user.role_label }}{% if student %} · группа {{ student.group.name if student.group else '—' }}{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not student %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Учётная запись не связана ни с одной записью студента.
+    Сообщите администратору — он перепривяжет её к вашему номеру зачётки.
+</div>
+{% else %}
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="bi bi-person-circle display-4 text-primary"></i>
+                <h5 class="mt-2 mb-0">{{ student.full_name }}</h5>
+                <p class="text-muted small mb-0">{{ student.group.name if student.group else 'группа не указана' }}</p>
+            </div>
+            <ul class="list-group list-group-flush">
+                <li class="list-group-item d-flex justify-content-between">
+                    <span class="text-muted">Зачётка</span>
+                    <strong>{{ student.student_id }}</strong>
+                </li>
+                <li class="list-group-item d-flex justify-content-between">
+                    <span class="text-muted">Средний балл</span>
+                    <strong>
+                        {% if average %}
+                            {{ average }}
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </strong>
+                </li>
+                <li class="list-group-item d-flex justify-content-between">
+                    <span class="text-muted">Всего оценок</span>
+                    <strong>{{ grades|length }}</strong>
+                </li>
+                <li class="list-group-item d-flex justify-content-between">
+                    <span class="text-muted">Статус</span>
+                    <span>
+                        {% if student.status == 'active' %}
+                            <span class="badge bg-success">учится</span>
+                        {% elif student.status == 'academic_leave' %}
+                            <span class="badge bg-warning">академический отпуск</span>
+                        {% else %}
+                            <span class="badge bg-secondary">отчислен</span>
+                        {% endif %}
+                    </span>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-journal-check me-2"></i>Мои оценки</h5>
+            </div>
+            <div class="card-body">
+                {% if grades %}
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>Предмет</th>
+                                <th>Вид</th>
+                                <th>Оценка</th>
+                                <th>Комментарий</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for grade in grades %}
+                            <tr>
+                                <td class="text-nowrap">{{ grade.date.strftime('%d.%m.%Y') }}</td>
+                                <td>{{ grade.subject.name }}</td>
+                                <td>
+                                    <span class="badge bg-light text-dark border">{{ grade.grade_type }}</span>
+                                </td>
+                                <td>
+                                    <span class="badge {{ 'bg-success' if grade_to_points(grade.grade_value) and grade_to_points(grade.grade_value) >= 4 else ('bg-danger' if grade_to_points(grade.grade_value) and grade_to_points(grade.grade_value) <= 2 else 'bg-secondary') }}">
+                                        {{ grade.grade_value }}
+                                    </span>
+                                </td>
+                                <td class="text-muted small">{{ grade.comments or '—' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-inbox display-5 d-block mb-2"></i>
+                    Оценок пока нет
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-key me-2"></i>Смена пароля</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('main.change_password') }}" class="row g-3">
+            {{ form.hidden_tag() }}
+            <div class="col-md-3">
+                {{ form.current_password.label(class="form-label") }}
+                {{ form.current_password(class="form-control") }}
+                {% for error in form.current_password.errors %}
+                    <div class="text-danger small mt-1">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-md-3">
+                {{ form.new_password.label(class="form-label") }}
+                {{ form.new_password(class="form-control") }}
+                {% for error in form.new_password.errors %}
+                    <div class="text-danger small mt-1">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-md-3">
+                {{ form.confirm_password.label(class="form-label") }}
+                {{ form.confirm_password(class="form-control") }}
+                {% for error in form.confirm_password.errors %}
+                    <div class="text-danger small mt-1">{{ error }}</div>
+                {% endfor %}
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-check-circle"></i> Сменить
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}

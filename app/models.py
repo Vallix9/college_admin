@@ -16,20 +16,77 @@ def now():
 
 
 class User(UserMixin, db.Model):
+    ROLE_ADMIN = 'admin'
+    ROLE_TEACHER = 'teacher'
+    ROLE_STUDENT = 'student'
+    ROLES = (ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT)
+
+    ROLE_LABELS = {
+        ROLE_ADMIN: 'Администратор',
+        ROLE_TEACHER: 'Преподаватель',
+        ROLE_STUDENT: 'Студент',
+    }
+
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256))
-    role = db.Column(db.String(20), default='admin')
+    role = db.Column(db.String(20), default=ROLE_ADMIN)
     created_at = db.Column(db.DateTime, default=now)
-    
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+    password_changed_at = db.Column(db.DateTime)
+    last_login_at = db.Column(db.DateTime)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    full_name = db.Column(db.String(200))
+    email = db.Column(db.String(100))
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
-    
+        self.password_changed_at = now()
+
     def check_password(self, password):
+        if not self.password_hash:
+            return False
         return check_password_hash(self.password_hash, password)
-    
+
+    @property
+    def is_admin(self):
+        return self.role == self.ROLE_ADMIN
+
+    @property
+    def is_teacher(self):
+        return self.role == self.ROLE_TEACHER
+
+    @property
+    def is_student(self):
+        return self.role == self.ROLE_STUDENT
+
+    @property
+    def can_manage_data(self):
+        """Администратор и преподаватель; студент только читает своё."""
+        return self.role in (self.ROLE_ADMIN, self.ROLE_TEACHER)
+
+    @property
+    def display_name(self):
+        return self.full_name or self.username
+
+    @property
+    def role_label(self):
+        return self.ROLE_LABELS.get(self.role, self.role)
+
+    def teaches(self, subject):
+        """Преподаватель ведёт этот предмет.
+
+        Администратор считается имеющим доступ ко всем предметам: он не
+        ведёт журналы, но должен видеть и править их.
+        """
+        if self.is_admin:
+            return True
+        if not self.is_teacher or subject is None:
+            return False
+        return subject.teacher_id == self.id
+
     def __repr__(self):
-        return f'<User {self.username}>'
+        return f'<User {self.username} ({self.role})>'
 
 class SystemSettings(db.Model):
     """Модель для хранения системных настроек"""
@@ -127,6 +184,9 @@ class Student(db.Model):
     status = db.Column(db.String(20), default='active')
     enrollment_date = db.Column(db.Date, default=now().date())
     created_at = db.Column(db.DateTime, default=now)
+    # Связь с учётной записью. nullable=True: у старых студентов из сида
+    # аккаунта нет, и они не должны ломать импорт и сид.
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), unique=True)
     
     grades = db.relationship('Grade', backref='student', lazy=True, cascade='all, delete-orphan')
     
@@ -151,8 +211,11 @@ class Subject(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     hours = db.Column(db.Integer, default=72)
+    # Преподаватель, ведущий предмет. NULL — предмет ещё не распределён.
+    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     created_at = db.Column(db.DateTime, default=now)
     
+    teacher = db.relationship('User', backref='subjects', lazy=True)
     grades = db.relationship('Grade', backref='subject', lazy=True, cascade='all, delete-orphan')
     
     def __repr__(self):

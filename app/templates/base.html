@@ -57,84 +57,38 @@
                         <small class="text-muted">Административная панель</small>
                     </div>
                     
-                    <!-- Навигация -->
+                    <!-- Навигация: состав пунктов зависит от роли -->
                     <nav class="flex-grow-1 px-3">
                         <ul class="nav flex-column">
+                            {% for item in nav_items %}
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint == 'main.dashboard' %}active{% endif %}" 
-                                   href="{{ url_for('main.dashboard') }}">
-                                    <i class="bi bi-speedometer2 me-2"></i>
-                                    <span>Дашборд</span>
+                                <a class="nav-link {% if request.endpoint == item.endpoint %}active{% endif %}"
+                                   href="{{ url_for(item.endpoint) }}">
+                                    <i class="bi {{ item.icon }} me-2"></i>
+                                    <span>{{ item.label }}</span>
                                 </a>
                             </li>
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ['main.students', 'main.add_student', 'main.edit_student', 'main.view_student'] %}active{% endif %}" 
-                                   href="{{ url_for('main.students') }}">
-                                    <i class="bi bi-people me-2"></i>
-                                    <span>Студенты</span>
-                                </a>
-                            </li>
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ['main.groups', 'main.add_group', 'main.edit_group'] %}active{% endif %}" 
-                                   href="{{ url_for('main.groups') }}">
-                                    <i class="bi bi-collection me-2"></i>
-                                    <span>Группы</span>
-                                </a>
-                            </li>
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ['main.subjects', 'main.add_subject', 'main.edit_subject'] %}active{% endif %}" 
-                                   href="{{ url_for('main.subjects') }}">
-                                    <i class="bi bi-book me-2"></i>
-                                    <span>Предметы</span>
-                                </a>
-                            </li>
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ['main.grades', 'main.add_grade'] %}active{% endif %}" 
-                                   href="{{ url_for('main.grades') }}">
-                                    <i class="bi bi-journal-check me-2"></i>
-                                    <span>Оценки</span>
-                                </a>
-                            </li>
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ['main.reports', 'main.report_students', 'main.report_group'] %}active{% endif %}" 
-                                   href="{{ url_for('main.reports') }}">
-                                    <i class="bi bi-file-earmark-bar-graph me-2"></i>
-                                    <span>Отчёты</span>
-                                </a>
-                            </li>
+                            {% endfor %}
                         </ul>
-                        
+
+                        {% if system_items %}
                         <!-- Разделитель -->
                         <hr class="my-4">
-                        
-                        <!-- Обслуживание системы -->
+
+                        <!-- Обслуживание системы: только для администратора -->
                         <ul class="nav flex-column">
+                            {% for item in system_items %}
                             <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('main.settings') }}">
-                                    <i class="bi bi-gear me-2"></i>
-                                    <span>Настройки</span>
+                                <a class="nav-link {% if request.endpoint == item.endpoint %}active{% endif %}"
+                                   href="{{ url_for(item.endpoint) }}">
+                                    <i class="bi {{ item.icon }} me-2"></i>
+                                    <span>{{ item.label }}</span>
                                 </a>
                             </li>
-                            <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('main.settings_backup') }}">
-                                    <i class="bi bi-hdd me-2"></i>
-                                    <span>Резервные копии</span>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('main.settings_import') }}">
-                                    <i class="bi bi-file-earmark-arrow-up me-2"></i>
-                                    <span>Импорт данных</span>
-                                </a>
-                            </li>
-                            <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('main.view_logs') }}">
-                                    <i class="bi bi-journal-text me-2"></i>
-                                    <span>Журнал событий</span>
-                                </a>
-                            </li>
+                            {% endfor %}
                         </ul>
-                        
+                        {% endif %}
+
                         <!-- Разделитель -->
                         <hr class="my-4">
                         
@@ -153,8 +107,8 @@
                     <div class="sidebar-footer p-3 text-center">
                         <small class="text-muted">
                             <i class="bi bi-shield-check"></i>
-                            Администратор<br>
-                            {{ current_user.username if current_user else 'Система' }}
+                            {{ current_user.role_label if current_user.is_authenticated else 'Система' }}<br>
+                            {{ current_user.display_name if current_user.is_authenticated else '—' }}
                         </small>
                     </div>
                 </div>
@@ -194,11 +148,14 @@
                                     <div class="rounded-circle bg-light p-2 me-2">
                                         <i class="bi bi-person text-primary"></i>
                                     </div>
-                                    <span class="text-dark">{{ current_user.username if current_user else 'Администратор' }}</span>
+                                    <span class="text-dark">{{ current_user.display_name if current_user.is_authenticated else 'Гость' }}</span>
                                 </a>
                                 <div class="dropdown-menu dropdown-menu-end">
-                                    <a class="dropdown-item" href="{{ url_for('main.dashboard') }}">
-                                        <i class="bi bi-speedometer2 me-2"></i>Дашборд
+                                    <a class="dropdown-item" href="{{ home_url() }}">
+                                        <i class="bi bi-speedometer2 me-2"></i>{{ 'Мой кабинет' if current_user.is_student else 'Дашборд' }}
+                                    </a>
+                                    <a class="dropdown-item" href="{{ url_for('main.change_password') }}">
+                                        <i class="bi bi-key me-2"></i>Сменить пароль
                                     </a>
                                     <div class="dropdown-divider"></div>
                                     <a class="dropdown-item text-danger" href="{{ url_for('main.logout') }}">
@@ -213,23 +170,28 @@
                 <!-- Хлебные крошки -->
                 <nav class="px-4 pt-3" aria-label="breadcrumb">
                     <ol class="breadcrumb mb-0">
-                        <li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+                        <li class="breadcrumb-item"><a href="{{ home_url() }}">Главная</a></li>
                         {% block breadcrumb %}{% endblock %}
                     </ol>
                 </nav>
                 
                 <!-- Заголовок страницы -->
-                <div class="px-4 pt-3">
-                    <h1 class="h4 fw-bold mb-0">
-                        {% block page_title %}{% endblock %}
-                    </h1>
-                    <p class="text-muted mb-4">
-                        {% block page_subtitle %}{% endblock %}
-                    </p>
+                <div class="px-4 pt-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
+                    <div>
+                        <h1 class="h4 fw-bold mb-0">
+                            {% block page_title %}{% endblock %}
+                        </h1>
+                        <p class="text-muted mb-0">
+                            {% block page_subtitle %}{% endblock %}
+                        </p>
+                    </div>
+                    <div class="d-flex gap-2">
+                        {% block header_actions %}{% endblock %}
+                    </div>
                 </div>
                 
                 <!-- Основной контент страницы -->
-                <div class="px-4 pb-4">
+                <div class="px-4 pt-3 pb-4">
                     {% with messages = get_flashed_messages(with_categories=true) %}
                         {% if messages %}
                             {% for category, message in messages %}

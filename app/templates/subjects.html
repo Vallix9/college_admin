@@ -12,6 +12,7 @@
 {% endblock %}
 
 {% block header_actions %}
+{% if current_user.is_admin %}
 <div class="d-flex">
     <a href="{{ url_for('main.add_subject') }}" class="btn btn-primary me-2">
         <i class="bi bi-plus-circle"></i> Добавить предмет
@@ -20,9 +21,13 @@
         <i class="bi bi-plus-lg"></i> Быстрое добавление
     </button>
 </div>
+{% else %}
+<span class="text-muted"><i class="bi bi-info-circle"></i> Показаны только ваши предметы</span>
+{% endif %}
 {% endblock %}
 
 {% block content %}
+{% if current_user.is_admin %}
 <!-- Быстрое добавление предмета -->
 <div class="card mb-4">
     <div class="card-header">
@@ -46,6 +51,7 @@
         </form>
     </div>
 </div>
+{% endif %}
 
 <div class="card">
     <div class="card-header">
@@ -57,6 +63,7 @@
                 <thead>
                     <tr>
                         <th>Название</th>
+                        <th>Преподаватель</th>
                         <th>Количество часов</th>
                         <th>Дата создания</th>
                         <th>Количество оценок</th>
@@ -68,6 +75,13 @@
                     <tr>
                         <td>
                             <strong>{{ subject.name }}</strong>
+                        </td>
+                        <td>
+                            {% if subject.teacher %}
+                                {{ subject.teacher.display_name }}
+                            {% else %}
+                                <span class="text-muted">не назначен</span>
+                            {% endif %}
                         </td>
                         <td>
                             <span class="badge bg-secondary">{{ subject.hours }} часов</span>
@@ -85,20 +99,26 @@
                                 <a href="{{ url_for('main.edit_subject', id=subject.id) }}" class="btn btn-outline-primary" title="Редактировать">
                                     <i class="bi bi-pencil"></i>
                                 </a>
+                                {% if current_user.is_admin %}
                                 <form method="POST" action="{{ url_for('main.delete_subject', id=subject.id) }}" style="display: inline;">
                                     <button type="submit" class="btn btn-outline-danger" title="Удалить" 
                                             onclick="return confirm('Удалить предмет \{{ subject.name }}\?')">
                                         <i class="bi bi-trash"></i>
                                     </button>
                                 </form>
+                                {% endif %}
                             </div>
                         </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="5" class="text-center text-muted py-4">
+                        <td colspan="6" class="text-center text-muted py-4">
                             <i class="bi bi-book display-5 d-block mb-2"></i>
+                            {% if current_user.is_admin %}
                             Нет ни одного предмета. Добавьте первый предмет.
+                            {% else %}
+                            Вам не назначено ни одного предмета. Обратитесь к администратору.
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -108,6 +128,7 @@
     </div>
 </div>
 
+{% if current_user.is_admin %}
 <!-- Модальное окно для быстрого добавления -->
 <div class="modal fade" id="quickAddSubjectModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
@@ -135,6 +156,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {

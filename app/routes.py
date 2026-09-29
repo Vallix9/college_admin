@@ -5,15 +5,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from datetime import datetime, date
 from sqlalchemy import or_, func, desc
+from functools import wraps
 import os
 from app.init_ import db
 from app.models import User, Student, Group, Subject, Grade, SystemSettings
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
-from app.forms import ClearLogsForm
+from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountPasswordForm
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
 from app.utils import get_logger, average_grade, build_import_template
 from app.utils import read_log_lines, get_log_file_path, clear_log_file
+from app.utils import generate_password
 
 log = get_logger()
 
@@ -135,10 +137,89 @@ def subject_grade_counts():
     ).group_by(Grade.subject_id).all()
     return dict(rows)
 
+
+# ===================== РАЗГРАНИЧЕНИЕ ПРАВ ПО РОЛЯМ =====================
+
+def role_required(*roles):
+    """Доступ только для перечисленных ролей. Отказ — 403, не редирект.
+
+    Редирект на страницу входа тут был бы неверным: пользователь уже
+    авторизован, и молчаливый возврат на главную скрыл бы от него причину.
+    """
+    def decorator(view):
+        @wraps(view)
+        @login_required
+        def wrapped(*args, **kwargs):
+            if current_user.role not in roles:
+                log.warning('Доступ запрещён: %s (роль %s) попытался открыть %s',
+                            current_user.username, current_user.role, request.path)
+                return render_template('error.html', code=403,
+                                       message='У вас нет прав для просмотра этой страницы.'), 403
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+admin_required = role_required(User.ROLE_ADMIN)
+staff_required = role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
+student_required = role_required(User.ROLE_STUDENT)
+
+
+def teacher_owns_subject(subject_id):
+    """Преподаватель не должен видеть и править чужие предметы."""
+    subject = db.session.get(Subject, subject_id)
+    if subject is None:
+        return None, (render_template('error.html', code=404,
+                                      message='Предмет не найден.'), 404)
+    if not current_user.teaches(subject):
+        log.warning('Доступ запрещён: %s (роль %s) не ведёт предмет «%s»',
+                    current_user.username, current_user.role, subject.name)
+        return None, (render_template('error.html', code=403,
+                                      message='Этот предмет ведёт другой преподаватель.'), 403)
+    return subject, None
+
+
+def visible_subjects_query():
+    """Предметы, доступные текущему пользователю.
+
+    Преподаватель видит только свои, администратор — все, студент — ничего:
+    список предметов ему не нужен, у него личный кабинет.
+    """
+    if current_user.is_admin:
+        return Subject.query
+    if current_user.is_teacher:
+        return Subject.query.filter_by(teacher_id=current_user.id)
+    return Subject.query.filter_by(id=-1)
+
+
+def current_student():
+    """Запись Student, связанная с текущим пользователем-студентом."""
+    if not current_user.is_student:
+        return None
+    return Student.query.filter_by(user_id=current_user.id).first()
+
+
+def home_url():
+    """Куда отправлять пользователя после входа и с главной кнопки."""
+    if current_user.is_authenticated and current_user.is_student:
+        return url_for('main.my_account')
+    return url_for('main.dashboard')
+
+
+def teacher_choices():
+    """Список сотрудников, которым можно назначить предмет.
+
+    Преподаватель в списке не видит: он назначает предмет только себе.
+    """
+    query = User.query.filter(User.role.in_([User.ROLE_ADMIN, User.ROLE_TEACHER]))
+    return [(0, '— не назначен —')] + [
+        (user.id, f'{user.display_name} ({user.role_label})')
+        for user in query.order_by(User.username).all()]
+
 # ===================== АУТЕНТИФИКАЦИЯ =====================
 @main.route('/')
 @main.route('/dashboard')
-@login_required
+@staff_required
 def dashboard():
     try:
         settings = get_settings()
@@ -169,28 +250,35 @@ def dashboard():
 @main.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('main.dashboard'))
+        return redirect(home_url())
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
         
-        if user and user.check_password(form.password.data):
+        if user and not user.is_active:
+            # Отказ именно до проверки пароля: неактивному пользователю
+            # не нужно подтверждать, что он вводит правильный пароль
+            log.warning('Попытка входа заблокированного пользователя «%s» с %s',
+                        form.username.data, request.remote_addr)
+            flash_msg('error', 'Учётная запись отключена. Обратитесь к администратору.')
+        elif user and user.check_password(form.password.data):
             login_user(user, remember=form.remember_me.data)
             next_page = request.args.get('next')
             
             if not is_safe_redirect(next_page):
-                next_page = url_for('main.dashboard')
+                next_page = home_url()
             
             user.last_login_at = datetime.now()
             db.session.commit()
             log.info('Вход выполнен: %s (роль: %s) с %s',
                      user.username, user.role, request.remote_addr)
-            flash_msg('success', f'Добро пожаловать, {user.username}!')
+            flash_msg('success', f'Добро пожаловать, {user.display_name}!')
             return redirect(next_page)
         
-        log.warning('Неудачная попытка входа: логин «%s» с %s',
-                    form.username.data, request.remote_addr)
-        flash_msg('error', 'Неверное имя пользователя или пароль')
+        else:
+            log.warning('Неудачная попытка входа: логин «%s» с %s',
+                        form.username.data, request.remote_addr)
+            flash_msg('error', 'Неверное имя пользователя или пароль')
     
     return render_template('login.html', form=form)
 
@@ -204,7 +292,7 @@ def logout():
 
 # ===================== СТУДЕНТЫ =====================
 @main.route('/students')
-@login_required
+@staff_required
 def students():
     query = Student.query
     query, filters = apply_filters(query, Student)
@@ -219,7 +307,7 @@ def students():
                          averages=student_average_grades())
 
 @main.route('/students/add', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def add_student():
     form = StudentForm()
     form.group_id.choices = [(0, 'Без группы')] + [(g.id, g.name) for g in Group.query.all()]
@@ -257,7 +345,7 @@ def add_student():
     return render_template('student_form.html', form=form, title='Добавить студента', student=None)
 
 @main.route('/students/<int:id>/edit', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def edit_student(id):
     student = Student.query.get_or_404(id)
     form = StudentForm(obj=student)
@@ -282,7 +370,7 @@ def edit_student(id):
     return render_template('student_form.html', form=form, title='Редактировать студента', student=student)
 
 @main.route('/students/<int:id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_student(id):
     student = Student.query.get_or_404(id)
     full_name = student.full_name
@@ -299,7 +387,7 @@ def delete_student(id):
 
 # ===================== СТРАНИЦА СТУДЕНТА =====================
 @main.route('/student/<int:student_id>')
-@login_required
+@staff_required
 def view_student(student_id):
     """Детальная страница студента с управлением оценками"""
     student = Student.query.get_or_404(student_id)
@@ -343,7 +431,7 @@ def view_student(student_id):
 
 # ===================== ДОБАВЛЕНИЕ И УДАЛЕНИЕ ОЦЕНОК СТУДЕНТА =====================
 @main.route('/students/<int:student_id>/grades/add', methods=['POST'])
-@login_required
+@staff_required
 def add_grade_to_student(student_id):
     """Добавление оценки конкретному студенту со страницы студента"""
     student = Student.query.get_or_404(student_id)
@@ -388,7 +476,7 @@ def add_grade_to_student(student_id):
     return redirect(url_for('main.view_student', student_id=student_id))
 
 @main.route('/students/<int:student_id>/grades/<int:grade_id>/delete', methods=['POST'])
-@login_required
+@staff_required
 def delete_student_grade(student_id, grade_id):
     """Удаление оценки студента (основной эндпоинт для шаблона)"""
     try:
@@ -414,14 +502,14 @@ def delete_student_grade(student_id, grade_id):
 
 # Альтернативное имя для совместимости
 @main.route('/students/<int:student_id>/grades/<int:grade_id>/remove', methods=['POST'])
-@login_required
+@staff_required
 def delete_grade_from_student(student_id, grade_id):
     """Альтернативный эндпоинт для удаления оценки"""
     return delete_student_grade(student_id, grade_id)
 
 # ===================== ГРУППЫ =====================
 @main.route('/groups')
-@login_required
+@staff_required
 def groups():
     groups_list = Group.query.order_by(Group.name).all()
     # Один запрос вместо student_count() на каждую группу в шаблоне (N+1)
@@ -429,7 +517,7 @@ def groups():
                            student_counts=group_student_counts(groups_list))
 
 @main.route('/groups/add', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def add_group():
     form = GroupForm()
     if form.validate_on_submit():
@@ -457,7 +545,7 @@ def add_group():
     return render_template('group_form.html', form=form, title='Добавить группу', group=None)
 
 @main.route('/groups/<int:id>/edit', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def edit_group(id):
     group = Group.query.get_or_404(id)
     form = GroupForm(obj=group)
@@ -480,7 +568,7 @@ def edit_group(id):
     return render_template('group_form.html', form=form, title='Редактировать группу', group=group)
 
 @main.route('/groups/<int:id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_group(id):
     group = Group.query.get_or_404(id)
     name = group.name
@@ -497,15 +585,15 @@ def delete_group(id):
 
 # ===================== ПРЕДМЕТЫ =====================
 @main.route('/subjects')
-@login_required
+@staff_required
 def subjects():
-    """Список всех предметов"""
-    subjects_list = Subject.query.order_by(Subject.name).all()
+    """Список предметов. Преподаватель видит только свои."""
+    subjects_list = visible_subjects_query().order_by(Subject.name).all()
     return render_template('subjects.html', subjects=subjects_list,
                            grade_counts=subject_grade_counts())
 
 @main.route('/subjects/add', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def add_subject():
     """Добавление нового предмета (ОДНА ФУНКЦИЯ - НЕТ ДУБЛИРОВАНИЯ)"""
     if request.method == 'POST':
@@ -577,17 +665,29 @@ def add_subject():
     
     # GET запрос - показываем форму
     form = SubjectForm()
-    return render_template('subject_form.html', form=form, title='Добавить предмет')
+    form.teacher_id.choices = teacher_choices()
+    return render_template('subject_form.html', form=form, title='Добавить предмет',
+                           teachers=teacher_choices())
 
 @main.route('/subjects/<int:id>/edit', methods=['GET', 'POST'])
-@login_required
+@staff_required
 def edit_subject(id):
-    """Редактирование предмета"""
-    subject = Subject.query.get_or_404(id)
+    """Редактирование предмета. Преподаватель — только свой."""
+    subject, error = teacher_owns_subject(id)
+    if error:
+        return error
+
     form = SubjectForm(obj=subject)
+    form.teacher_id.choices = teacher_choices()
     if form.validate_on_submit():
-        try:
+        if current_user.is_admin:
             form.populate_obj(subject)
+        else:
+            # Преподаватель не может передать предмет другому и не должен
+            # подменять его — форма уже заполнена текущим предметом
+            subject.name = form.name.data
+            subject.hours = form.hours.data
+        try:
             db.session.commit()
             log.info('Изменён предмет: «%s» — %s', subject.name, current_user.username)
             flash_msg('success', f'Предмет "{subject.name}" обновлен')
@@ -601,10 +701,12 @@ def edit_subject(id):
             log.exception('Ошибка изменения предмета: %s', e)
             flash_msg('error', f'Ошибка обновления предмета: {str(e)}')
     
-    return render_template('subject_form.html', form=form, title='Редактировать предмет', subject=subject)
+    return render_template('subject_form.html', form=form,
+                           title='Редактировать предмет', subject=subject,
+                           teachers=teacher_choices())
 
 @main.route('/subjects/<int:id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_subject(id):
     """Удаление предмета"""
     subject = Subject.query.get_or_404(id)
@@ -630,19 +732,19 @@ def delete_subject(id):
 
 # ===================== ОЦЕНКИ =====================
 @main.route('/grades')
-@login_required
+@staff_required
 def grades():
-    """Список всех оценок"""
-    # Получаем параметры фильтрации
+    """Список оценок. Преподаватель видит оценки только по своим предметам."""
     group_id = request.args.get('group', type=int)
     student_id = request.args.get('student', type=int)
-    # Создаем базовый запрос
     # options подгружают студента, группу и предмет вместе со строкой:
     # без них обращения в шаблоне дают отдельный SELECT на каждую оценку
     query = Grade.query.join(Student).join(Subject).options(
         joinedload(Grade.student).joinedload(Student.group),
         joinedload(Grade.subject)
     )
+    if not current_user.is_admin:
+        query = query.filter(Subject.teacher_id == current_user.id)
     
     # Применяем фильтры
     if group_id:
@@ -657,7 +759,16 @@ def grades():
     
     # Получаем данные для фильтров
     groups = Group.query.all()
-    students = Student.query.order_by(Student.last_name).all()
+    if current_user.is_admin:
+        students = Student.query.order_by(Student.last_name).all()
+    else:
+        # Преподавателю незачем видеть всех студентов колледжа: в фильтре
+        # ему нужны только те, у кого уже есть оценки по его предметам
+        subject_ids = [s.id for s in
+                       Subject.query.filter_by(teacher_id=current_user.id).all()]
+        students = (Student.query.join(Grade)
+                    .filter(Grade.subject_id.in_(subject_ids))
+                    .distinct().order_by(Student.last_name).all())
     
     # Подготавливаем фильтры для отображения
     current_filters = {}
@@ -673,7 +784,7 @@ def grades():
                          current_filters=current_filters)
 
 @main.route('/grades/add', methods=['GET', 'POST'])
-@login_required
+@staff_required
 def add_grade():
     """Добавление новой оценки"""
     form = GradeForm()
@@ -690,6 +801,12 @@ def add_grade():
             if not subject:
                 flash_msg('error', 'Выбранный предмет не найден')
                 return redirect(url_for('main.add_grade'))
+
+            if not current_user.teaches(subject):
+                log.warning('Преподаватель %s попытался поставить оценку по чужому предмету «%s»',
+                            current_user.username, subject.name)
+                return render_template('error.html', code=403,
+                                       message='Этот предмет ведёт другой преподаватель.'), 403
             
             grade = Grade(
                 student_id=form.student_id.data,
@@ -711,13 +828,20 @@ def add_grade():
             log.exception('Ошибка добавления оценки: %s', e)
             flash_msg('error', f'Ошибка добавления оценки: {str(e)}')
     
+    form.subject_id.choices = [(0, '— выберите предмет —')] + [
+        (s.id, s.name) for s in visible_subjects_query().order_by(Subject.name).all()]
     return render_template('grade_form.html', form=form, title='Добавить оценку')
 
 @main.route('/grades/<int:id>/delete', methods=['POST'])
-@login_required
+@staff_required
 def delete_grade(id):
     """Удаление оценки"""
     grade = Grade.query.get_or_404(id)
+    if not current_user.teaches(grade.subject):
+        log.warning('Преподаватель %s попытался удалить оценку по чужому предмету «%s»',
+                    current_user.username, grade.subject.name)
+        return render_template('error.html', code=403,
+                               message='Этот предмет ведёт другой преподаватель.'), 403
     info = 'студент %s, предмет «%s», значение %s' % (
         grade.student.full_name, grade.subject.name, grade.grade_value)
     try:
@@ -731,9 +855,264 @@ def delete_grade(id):
         flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
     return redirect(url_for('main.grades'))
 
+# ===================== СОТРУДНИКИ =====================
+@main.route('/staff')
+@admin_required
+def staff():
+    """Список сотрудников с их предметами и последним входом."""
+    staff_list = (User.query
+                  .filter(User.role.in_([User.ROLE_ADMIN, User.ROLE_TEACHER]))
+                  .options(joinedload(User.subjects))
+                  .order_by(User.role, User.username).all())
+    # Форму сброса пароля делаем для каждой строки таблицы, иначе токен
+    # пришлось бы подставлять вручную — и он молча пропадёт при Фазе 14
+    reset_forms = {user.id: StaffPasswordResetForm() for user in staff_list}
+    return render_template('staff.html', staff=staff_list,
+                           reset_forms=reset_forms,
+                           groups=Group.query.order_by(Group.name).all(),
+                           roles=User.ROLE_LABELS)
+
+
+@main.route('/staff/add', methods=['GET', 'POST'])
+@admin_required
+def add_staff():
+    """Создание учётной записи сотрудника"""
+    form = StaffForm()
+    if form.validate_on_submit():
+        try:
+            user = User(username=form.username.data.strip(),
+                        full_name=(form.full_name.data or '').strip() or None,
+                        email=form.email.data or None,
+                        role=form.role.data,
+                        is_active=form.is_active.data,
+                        created_by=current_user.id)
+            user.set_password(form.password.data)
+            db.session.add(user)
+            db.session.commit()
+            log.info('Создан сотрудник: %s (роль %s) — %s',
+                     user.username, user.role, current_user.username)
+            flash_msg('success', f'Сотрудник {user.display_name} создан')
+            return redirect(url_for('main.staff'))
+        except IntegrityError:
+            db.session.rollback()
+            flash_msg('error', 'Такой логин уже существует')
+        except Exception as e:
+            db.session.rollback()
+            log.exception('Ошибка создания сотрудника: %s', e)
+            flash_msg('error', f'Ошибка создания сотрудника: {str(e)}')
+    return render_template('staff_form.html', form=form, user=None,
+                           title='Создание сотрудника', roles=User.ROLE_LABELS)
+
+
+@main.route('/staff/<int:id>/edit', methods=['GET', 'POST'])
+@admin_required
+def edit_staff(id):
+    """Правка сотрудника: роль, ФИО, блокировка"""
+    user = User.query.get_or_404(id)
+    if user.id == current_user.id and user.role != User.ROLE_ADMIN:
+        # Нельзя лишить себя прав в единственной сессии
+        flash_msg('error', 'Нельзя изменить собственную роль на более низкую')
+        return redirect(url_for('main.staff'))
+
+    form = StaffForm(user=user)
+    if form.validate_on_submit():
+        demoting = user.is_admin and form.role.data != User.ROLE_ADMIN
+        if demoting and User.query.filter_by(
+                role=User.ROLE_ADMIN, is_active=True).count() <= 1:
+            flash_msg('error', 'В системе должен остаться хотя бы один '
+                               'активный администратор')
+            return redirect(url_for('main.staff'))
+
+        # Логин менять не даём: на него завязаны записи о действиях
+        user.full_name = (form.full_name.data or '').strip() or None
+        user.email = form.email.data or None
+        user.role = form.role.data
+        user.is_active = form.is_active.data
+        try:
+            db.session.commit()
+            log.info('Изменён сотрудник %s: роль %s, активен %s — %s',
+                     user.username, user.role, user.is_active,
+                     current_user.username)
+            flash_msg('success', f'Данные сотрудника {user.display_name} сохранены')
+            return redirect(url_for('main.staff'))
+        except Exception as e:
+            db.session.rollback()
+            log.exception('Ошибка сохранения сотрудника: %s', e)
+            flash_msg('error', f'Ошибка сохранения: {str(e)}')
+    return render_template('staff_form.html', form=form, user=user,
+                           title='Редактирование сотрудника', roles=User.ROLE_LABELS)
+
+
+@main.route('/staff/<int:id>/reset-password', methods=['POST'])
+@admin_required
+def reset_staff_password(id):
+    """Сброс пароля сотрудника"""
+    user = User.query.get_or_404(id)
+    form = StaffPasswordResetForm()
+    if not form.validate_on_submit():
+        flash_msg('error', 'Новый пароль не прошёл проверку')
+        return redirect(url_for('main.staff'))
+    try:
+        user.set_password(form.password.data)
+        db.session.commit()
+        log.warning('Сброшен пароль сотрудника %s — %s',
+                    user.username, current_user.username)
+        flash_msg('success', f'Пароль сотрудника {user.display_name} сброшен')
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка сброса пароля: %s', e)
+        flash_msg('error', f'Ошибка сброса пароля: {str(e)}')
+    return redirect(url_for('main.staff'))
+
+
+@main.route('/staff/<int:id>/delete', methods=['POST'])
+@admin_required
+def delete_staff(id):
+    """Удаление сотрудника.
+
+    Удаляем только тех, у кого нет назначенных предметов; остальным
+    предлагаем блокировку, чтобы не терять историю действий.
+    """
+    user = User.query.get_or_404(id)
+    if user.id == current_user.id:
+        flash_msg('error', 'Нельзя удалить собственную учётную запись')
+        return redirect(url_for('main.staff'))
+    if user.is_admin and User.query.filter_by(
+            role=User.ROLE_ADMIN).count() <= 1:
+        flash_msg('error', 'В системе должен остаться хотя бы один администратор')
+        return redirect(url_for('main.staff'))
+    if user.subjects:
+        flash_msg('error', f'Сначала снимите с сотрудника {user.subjects} предметов')
+        return redirect(url_for('main.staff'))
+
+    username = user.username
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        log.warning('Удалён сотрудник: %s — %s', username, current_user.username)
+        flash_msg('success', f'Сотрудник {username} удалён')
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка удаления сотрудника: %s', e)
+        flash_msg('error', f'Ошибка удаления: {str(e)}')
+    return redirect(url_for('main.staff'))
+
+
+@main.route('/staff/student-accounts', methods=['POST'])
+@admin_required
+def create_student_accounts():
+    """Массовая выдача учётных записей студентам.
+
+    Логином служит номер зачётки, пароль — временный. Аккаунты создаются
+    только для тех студентов, у кого их ещё нет; существующие не трогаются.
+    """
+    group_id = request.form.get('group', type=int)
+    status = request.form.get('status', 'active')
+
+    query = Student.query.filter(Student.user_id.is_(None))
+    if group_id:
+        query = query.filter(Student.group_id == group_id)
+    if status and status != 'all':
+        query = query.filter(Student.status == status)
+
+    students_list = query.order_by(Student.last_name).all()
+    if not students_list:
+        flash_msg('info', 'Нет студентов без учётной записи')
+        return redirect(url_for('main.staff'))
+
+    issued = []
+    skipped = []
+    for student in students_list:
+        login_name = student.student_id
+        if User.query.filter_by(username=login_name).first():
+            # логин занят не студентом — не трогаем, разбираться должен админ
+            skipped.append(student.full_name)
+            continue
+        temporary_password = generate_password()
+        try:
+            user = User(username=login_name,
+                        full_name=student.full_name,
+                        role=User.ROLE_STUDENT,
+                        is_active=True,
+                        created_by=current_user.id)
+            user.set_password(temporary_password)
+            db.session.add(user)
+            db.session.flush()
+            student.user_id = user.id
+            issued.append({'login': login_name, 'name': student.full_name,
+                           'password': temporary_password})
+        except Exception as e:
+            log.exception('Не удалось выдать аккаунт %s: %s', login_name, e)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка массовой выдачи аккаунтов: %s', e)
+        flash_msg('error', f'Ошибка выдачи учётных записей: {str(e)}')
+        return redirect(url_for('main.staff'))
+
+    if issued:
+        log.info('Выдано учётных записей студентам: %d — %s',
+                 len(issued), current_user.username)
+    if skipped:
+        log.warning('Логины заняты, записи не выданы: %d', len(skipped))
+        flash_msg('warning', f'Пропущено записей с занятым логином: {len(skipped)}. '
+                            f'Проверьте их вручную.')
+    if not issued:
+        flash_msg('info', 'Новые учётные записи не созданы')
+        return redirect(url_for('main.staff'))
+
+    return render_template(
+        'staff_accounts_issued.html', issued=issued, skipped=skipped)
+
+
+# ===================== ЛИЧНЫЙ КАБИНЕТ =====================
+@main.route('/my/account')
+@login_required
+def my_account():
+    """Личный кабинет. Сотруднику — сводка, студенту — его данные."""
+    if not current_user.is_student:
+        return redirect(url_for('main.dashboard'))
+
+    student = current_student()
+    if student is None:
+        # Аксаунт есть, а записи студента нет: показываем это прямо,
+        # а не пустую страницу
+        return render_template('account.html', student=None, grades=[],
+                               average=None, form=AccountPasswordForm())
+
+    # student.grades — уже загруженный список, порядок задаём запросом
+    grades_list = (Grade.query
+                   .filter_by(student_id=student.id)
+                   .options(joinedload(Grade.subject))
+                   .order_by(Grade.date.desc(), Grade.id.desc()).all())
+    return render_template('account.html', student=student, grades=grades_list,
+                           average=average_grade(grades_list),
+                           form=AccountPasswordForm())
+
+
+@main.route('/my/password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    """Смена собственного пароля"""
+    form = AccountPasswordForm()
+    if form.validate_on_submit():
+        if not current_user.check_password(form.current_password.data):
+            flash_msg('error', 'Текущий пароль указан неверно')
+        else:
+            current_user.set_password(form.new_password.data)
+            db.session.commit()
+            log.info('Пользователь %s сменил пароль', current_user.username)
+            flash_msg('success', 'Пароль успешно изменён')
+            return redirect(request.referrer or home_url())
+    return render_template('password_form.html', form=form,
+                           title='Смена пароля')
+
+
 # ===================== ОТЧЕТЫ =====================
 @main.route('/reports')
-@login_required
+@staff_required
 def reports():
     groups_list = Group.query.order_by(Group.name).all()
     return render_template('reports.html', groups=groups_list,
@@ -743,7 +1122,7 @@ def reports():
                            subject_count=Subject.query.count())
 
 @main.route('/reports/generate', methods=['POST'])
-@login_required
+@staff_required
 def generate_report():
     report_type = request.form.get('report_type')
     group_id = request.form.get('group_id')
@@ -806,7 +1185,7 @@ def generate_report():
         return redirect(url_for('main.reports'))
 
 @main.route('/reports/students')
-@login_required
+@staff_required
 def report_students():
     """Экспорт всех студентов"""
     try:
@@ -831,7 +1210,7 @@ def report_students():
         return redirect(url_for('main.reports'))
 
 @main.route('/reports/group/<int:group_id>')
-@login_required
+@staff_required
 def report_group(group_id):
     """Экспорт студентов группы"""
     try:
@@ -859,7 +1238,7 @@ def report_group(group_id):
 
 # ===================== НАСТРОЙКИ =====================
 @main.route('/settings', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def settings():
     """Настройки системы: сохранение, смена пароля, сброс к умолчаниям"""
     current = get_settings()
@@ -925,7 +1304,7 @@ def _settings_stats():
 
 # ===================== РЕЗЕРВНОЕ КОПИРОВАНИЕ =====================
 @main.route('/settings/backup', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def settings_backup():
     """Страница управления резервными копиями"""
     form = BackupForm()
@@ -946,7 +1325,7 @@ def settings_backup():
     return render_template('settings_backup.html', form=form, backups=backups)
 
 @main.route('/settings/backup/<filename>/download')
-@login_required
+@admin_required
 def download_backup_file(filename):
     """Скачивание резервной копии"""
     path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
@@ -958,7 +1337,7 @@ def download_backup_file(filename):
     return send_file(path, as_attachment=True)
 
 @main.route('/settings/backup/<filename>/restore', methods=['POST'])
-@login_required
+@admin_required
 def restore_backup_file(filename):
     """Восстановление базы данных из резервной копии"""
     path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
@@ -978,7 +1357,7 @@ def restore_backup_file(filename):
     return redirect(url_for('main.settings_backup'))
 
 @main.route('/settings/backup/<filename>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_backup_file(filename):
     """Удаление файла резервной копии"""
     if delete_backup(filename):
@@ -991,7 +1370,7 @@ def delete_backup_file(filename):
 
 # ===================== ИМПОРТ ДАННЫХ =====================
 @main.route('/settings/import', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def settings_import():
     """Страница импорта данных из Excel/CSV"""
     form = ImportForm()
@@ -1040,7 +1419,7 @@ def settings_import():
 
 
 @main.route('/settings/export-template/<import_type>')
-@login_required
+@admin_required
 def export_import_template(import_type):
     """Скачивание .xlsx-шаблона с правильными названиями столбцов"""
     try:
@@ -1060,7 +1439,7 @@ LOG_PAGE_SIZE = 200
 
 
 @main.route('/settings/logs')
-@login_required
+@admin_required
 def view_logs():
     """Просмотр журнала событий с фильтрацией по уровню и поиском"""
     raw_levels = request.args.getlist('level') or list(LOG_LEVELS[:3])
@@ -1089,7 +1468,7 @@ def view_logs():
 
 
 @main.route('/api/system/download-logs')
-@login_required
+@admin_required
 def download_logs():
     """Скачивание текущего журнала как .txt"""
     path = get_log_file_path()
@@ -1103,7 +1482,7 @@ def download_logs():
 
 
 @main.route('/api/system/clear-logs', methods=['POST'])
-@login_required
+@admin_required
 def clear_logs():
     """Очистка журнала.
 

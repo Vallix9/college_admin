@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField
+from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField, EmailField
 from wtforms.validators import DataRequired, Length, EqualTo, Optional, Email, ValidationError, NumberRange
 from wtforms.widgets import ListWidget, CheckboxInput
 from app.models import User, Subject
@@ -42,7 +42,79 @@ class GroupForm(FlaskForm):
 class SubjectForm(FlaskForm):
     name = StringField('Название предмета*', validators=[DataRequired(), Length(max=100)])
     hours = IntegerField('Количество часов', default=72, validators=[Optional(), NumberRange(min=1)])
+    teacher_id = SelectField('Преподаватель', coerce=int, choices=[], validators=[Optional()])
     submit = SubmitField('Сохранить')
+
+    def validate_teacher_id(self, field):
+        """Предмет можно закрепить только за существующим сотрудником."""
+        if not field.data:
+            return
+        from app.models import User
+        teacher = User.query.get(field.data)
+        if teacher is None:
+            raise ValidationError('Преподаватель не найден')
+        if not teacher.can_manage_data:
+            raise ValidationError('Сотрудник не может вести предметы')
+
+
+class StaffForm(FlaskForm):
+    """Создание и правка учётной записи сотрудника."""
+    username = StringField('Логин*', validators=[DataRequired(), Length(min=3, max=64)])
+    full_name = StringField('ФИО', validators=[Optional(), Length(max=200)])
+    email = EmailField('Email', validators=[Optional(), Length(max=100)])
+    role = SelectField('Роль*', choices=[
+        (User.ROLE_ADMIN, 'Администратор — полный доступ'),
+        (User.ROLE_TEACHER, 'Преподаватель — свои предметы'),
+    ], validators=[DataRequired()])
+    password = PasswordField(
+        'Пароль*', validators=[Optional(), Length(min=6, max=128)])
+    confirm_password = PasswordField(
+        'Повторите пароль*',
+        validators=[EqualTo('password', message='Пароли не совпадают')])
+    is_active = BooleanField('Учётная запись активна', default=True)
+    submit = SubmitField('Сохранить')
+
+    def __init__(self, *args, user=None, **kwargs):
+        # user=None — создание нового сотрудника, иначе правка существующего.
+        # Отдельный аргумент, а не kwarg: WTForms принимает лишние kwargs как
+        # значения по умолчанию для полей.
+        self.user = user
+        super().__init__(*args, **kwargs)
+        if user is None:
+            # При создании пароль обязателен, при правке — нет
+            self.password.validators = [DataRequired(), Length(min=6, max=128)]
+            self.confirm_password.validators = [
+                DataRequired(),
+                EqualTo('password', message='Пароли не совпадают')]
+
+    def validate_username(self, field):
+        from app.models import User
+        query = User.query.filter(User.username == field.data)
+        if self.user is not None:
+            query = query.filter(User.id != self.user.id)
+        if query.first():
+            raise ValidationError('Такой логин уже занят')
+
+
+class StaffPasswordResetForm(FlaskForm):
+    """Сброс пароля сотрудника администратором."""
+    password = PasswordField('Новый пароль*', validators=[DataRequired(), Length(min=6, max=128)])
+    confirm_password = PasswordField(
+        'Повторите пароль*',
+        validators=[EqualTo('password', message='Пароли не совпадают')])
+    submit = SubmitField('Сбросить пароль')
+
+
+class AccountPasswordForm(FlaskForm):
+    """Смена собственного пароля в личном кабинете."""
+    current_password = PasswordField(
+        'Текущий пароль*', validators=[DataRequired()])
+    new_password = PasswordField(
+        'Новый пароль*', validators=[DataRequired(), Length(min=6, max=128)])
+    confirm_password = PasswordField(
+        'Повторите новый пароль*',
+        validators=[EqualTo('new_password', message='Пароли не совпадают')])
+    submit = SubmitField('Изменить пароль')
 
 class GradeForm(FlaskForm):
     student_id = SelectField('Студент*', coerce=int, validators=[DataRequired()], choices=[])

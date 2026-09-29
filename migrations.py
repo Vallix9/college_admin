@@ -29,6 +29,11 @@ COLUMNS = [
     ('user', 'password_changed_at', 'password_changed_at DATETIME'),
     ('user', 'last_login_at', 'last_login_at DATETIME'),
     ('user', 'is_active', 'is_active BOOLEAN DEFAULT 1'),
+    # Фаза 5: роли, учётные записи сотрудников и назначение предметов
+    ('user', 'created_by', 'created_by INTEGER'),
+    ('user', 'full_name', 'full_name VARCHAR(150)'),
+    ('user', 'email', 'email VARCHAR(150)'),
+    ('subject', 'teacher_id', 'teacher_id INTEGER'),
 ]
 
 
