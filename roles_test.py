@@ -24,7 +24,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from app.init_ import create_app, db
-from app.models import User, Student, Subject, Grade
+from app.models import User, Student, Subject, Grade, ScheduleItem
 from app.utils import create_backup
 
 from config import load_env_file
@@ -48,6 +48,12 @@ CHECKS = [
     ('/subjects',             200, 200,   403),
     ('/grades',               200, 200,   403),
     ('/grades/add',           200, 200,   403),
+    # Фаза 7: преподаватель видит периоды и расписание (в них он нужен,
+    # чтобы вести журнал), но не может их править
+    ('/periods',              200, 200,   403),
+    ('/periods/add',          200, 403,   403),
+    ('/periods/generate',     200, 403,   403),
+    ('/schedule',             200, 200,   403),
     ('/reports',              200, 200,   403),
     ('/staff',                200, 403,   403),
     ('/staff/add',            200, 403,   403),
@@ -131,11 +137,17 @@ def prepare():
         if foreign is None:
             raise RuntimeError('Нет чужого предмета — нечего проверять 403')
 
+        # Пара в расписании, которую попробует удалить преподаватель
+        slot = (ScheduleItem.query
+                .filter_by(subject_id=subjects[0].id)
+                .order_by(ScheduleItem.id).first())
+
         return {'teacher_id': teacher.id,
                 'teacher_name': teacher.username,
                 'student_login': student.student_id,
                 'subject_ids': [s.id for s in subjects],
-                'foreign_subject': foreign.id}
+                'foreign_subject': foreign.id,
+                'schedule_item': slot.id if slot else None}
 
 
 def cleanup(ids):
@@ -239,6 +251,32 @@ def main():
                     if not ok:
                         failures.append(
                             f'преподаватель удаляет чужой предмет → {resp.status_code}')
+
+                # Расписание правит только администратор: одна ошибка здесь
+                # переставляет чужие пары и сбивает чужое расписание.
+                for url in ('/schedule/add', '/schedule/day', '/schedule/lessons'):
+                    resp = client.post(url, data={
+                        'group_id': 1, 'day_of_week': 1, 'subject_id': own,
+                        'lesson_number': 1, 'first_lesson': 1, 'last_lesson': 1,
+                        'date': '2026-09-28', 'csrf_token': csrf_of(client, '/schedule'),
+                    }, follow_redirects=False)
+                    ok = resp.status_code == 403
+                    print(f'{"✓" if ok else "✗"} преподавателю закрыт {url} '
+                          f'→ {resp.status_code}')
+                    if not ok:
+                        failures.append(
+                            f'преподаватель {url} → {resp.status_code}, ожидали 403')
+
+                slot = ids.get('schedule_item')
+                if slot:
+                    resp = client.post(f'/schedule/{slot}/delete',
+                                       follow_redirects=False)
+                    ok = resp.status_code == 403
+                    print(f'{"✓" if ok else "✗"} преподаватель не удаляет пару '
+                          f'→ {resp.status_code}')
+                    if not ok:
+                        failures.append(
+                            f'преподаватель удаляет пару → {resp.status_code}')
 
         # Преподаватель не должен ставить оценку по чужому предмету
         if foreign:

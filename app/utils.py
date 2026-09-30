@@ -9,7 +9,7 @@ import zipfile
 from logging.handlers import RotatingFileHandler
 
 import pandas as pd
-from datetime import datetime
+from datetime import date, datetime
 
 BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 BACKUP_DIR = os.path.join(BASEDIR, 'backups')
@@ -366,6 +366,91 @@ def build_import_template(import_type):
         book['Инструкция'].column_dimensions['A'].width = 80
 
     return filepath, filename
+
+def parse_academic_year(academic_year):
+    """'2026-2027' -> (2026, 2027). None, если строка не разобралась.
+
+    Учебный год всегда записан через дефис: «2026-2027», «2026/2027».
+    Взять только первые четыре цифры нельзя — тогда «2025-2026» и «2026-2025»
+    выглядели бы одинаково, а это разные годы.
+    """
+    match = re.search(r'(\d{4})\D+(\d{4})', str(academic_year or ''))
+    if not match:
+        return None
+    first, second = int(match.group(1)), int(match.group(2))
+    if second < first:
+        return None
+    return first, second
+
+
+# Границы периодов учебного года как (месяц, день) от начала года.
+# Учебный год 2026-2027 начинается 1 сентября 2026 года, поэтому периоды
+# с месяцем меньше сентября относятся к следующему календарному году.
+PERIOD_TEMPLATES = {
+    'quarter': [
+        ('I четверть', (9, 1), (12, 25)),
+        ('II четверть', (12, 26), (3, 15)),
+        ('III четверть', (3, 16), (6, 5)),
+        ('IV четверть', (6, 6), (8, 31)),
+    ],
+    'semester': [
+        ('I семестр', (9, 1), (1, 15)),
+        ('II семестр', (1, 16), (6, 30)),
+    ],
+}
+
+
+def build_periods(academic_year, kind='quarter'):
+    """Периоды учебного года по шаблону: [(name, start, end), ...].
+
+    kind — 'quarter' (четверти) или 'semester' (семестры). Неизвестный вид
+    трактуется как четверти, чтобы автосоздание никогда не падало.
+    """
+    years = parse_academic_year(academic_year)
+    if not years:
+        raise ValueError(
+            f'Не удалось разобрать учебный год «{academic_year}». '
+            'Ожидается формат 2026-2027.')
+    first_year, _ = years
+    template = PERIOD_TEMPLATES.get(kind, PERIOD_TEMPLATES['quarter'])
+
+    def resolve(month_day, base_year):
+        month, day = month_day
+        # Дата до сентября относится к следующему календарному году:
+        # II четверть заканчивается в марте 2027-го, а не 2026-го.
+        year = base_year if month >= 9 else base_year + 1
+        return date(year, month, day)
+
+    return [(name,
+             resolve(start, first_year),
+             resolve(end, first_year))
+            for name, start, end in template]
+
+
+def teacher_choices():
+    """Список сотрудников, которым можно назначить предмет.
+
+    Живёт здесь, а не в маршрутах, потому что нужна и формам: иначе forms
+    пришлось бы импортировать routes, а тот, в свою очередь, forms.
+    """
+    from app.models import User
+    query = User.query.filter(User.role.in_([User.ROLE_ADMIN, User.ROLE_TEACHER]))
+    return [(0, '— не назначен —')] + [
+        (user.id, f'{user.display_name} ({user.role_label})')
+        for user in query.order_by(User.username).all()]
+
+
+def group_choices():
+    """Группы для выпадающих списков: [(id, название), ...]."""
+    from app.models import Group
+    return [(g.id, g.name) for g in Group.query.order_by(Group.name).all()]
+
+
+def subject_choices():
+    """Предметы для выпадающих списков: [(id, название), ...]."""
+    from app.models import Subject
+    return [(s.id, s.name) for s in Subject.query.order_by(Subject.name).all()]
+
 
 def calculate_age(birth_date):
     """Вычисление возраста"""

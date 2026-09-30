@@ -90,6 +90,16 @@ class User(UserMixin, db.Model):
 
 class SystemSettings(db.Model):
     """Модель для хранения системных настроек"""
+
+    PERIOD_KIND_QUARTER = 'quarter'
+    PERIOD_KIND_SEMESTER = 'semester'
+    PERIOD_KINDS = (PERIOD_KIND_QUARTER, PERIOD_KIND_SEMESTER)
+
+    PERIOD_KIND_LABELS = {
+        PERIOD_KIND_QUARTER: 'Четверти (4 периода)',
+        PERIOD_KIND_SEMESTER: 'Семестры (2 периода)',
+    }
+
     id = db.Column(db.Integer, primary_key=True)
     college_name = db.Column(db.String(200), default='Технический колледж')
     academic_year = db.Column(db.String(50), default='2024-2025')
@@ -101,6 +111,11 @@ class SystemSettings(db.Model):
     items_per_page = db.Column(db.Integer, default=20)
     auto_backup = db.Column(db.Boolean, default=True)
     backup_frequency = db.Column(db.String(20), default='daily')  # daily, weekly, monthly
+    # Как делить учебный год на периоды: четыре четверти или два семестра.
+    # Влияет только на автосоздание периодов (Фаза 7) — уже созданные
+    # периоды остаются как есть.
+    period_kind = db.Column(db.String(20), default=PERIOD_KIND_QUARTER,
+                            nullable=False)
     updated_at = db.Column(db.DateTime, default=now, onupdate=now)
     
     def to_dict(self):
@@ -116,6 +131,7 @@ class SystemSettings(db.Model):
             'items_per_page': self.items_per_page,
             'auto_backup': self.auto_backup,
             'backup_frequency': self.backup_frequency,
+            'period_kind': self.period_kind,
             'updated_at': self.updated_at
         }
     
@@ -146,6 +162,7 @@ class SystemSettings(db.Model):
         settings.items_per_page = 20
         settings.auto_backup = True
         settings.backup_frequency = 'daily'
+        settings.period_kind = cls.PERIOD_KIND_QUARTER
         db.session.commit()
         return settings
 
@@ -377,6 +394,38 @@ class ScheduleItem(db.Model):
                 f'day={self.day_of_week} lesson={self.lesson_number}>')
 
 
+class LessonDate(db.Model):
+    """Отметка «занятие состоялось»: слот расписания в конкретную дату.
+
+    Расписание само по себе повторяется каждую неделю, но журналу нужны
+    конкретные рабочие даты: без них сетка Фазы 8 не знает, какие дни
+    вообще были, и оценки пришлось бы выставлять по календарю вслепую.
+
+    Запись создаётся один раз на пару «слот + дата» — повторная отметка
+    того же занятия не плодит дубликаты.
+    """
+
+    id = db.Column(db.Integer, primary_key=True)
+    schedule_item_id = db.Column(db.Integer, db.ForeignKey('schedule_item.id'),
+                                 nullable=False)
+    date = db.Column(db.Date, nullable=False, default=now().date())
+    created_at = db.Column(db.DateTime, default=now)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+    __table_args__ = (
+        db.UniqueConstraint('schedule_item_id', 'date', name='uq_lesson_date'),
+        # Журнал выбирает даты одним запросом и сортирует их
+        db.Index('ix_lesson_date_date', 'date'),
+    )
+
+    schedule_item = db.relationship('ScheduleItem', backref='lesson_dates',
+                                    lazy=True)
+    author = db.relationship('User', foreign_keys=[created_by], lazy=True)
+
+    def __repr__(self):
+        return f'<LessonDate item={self.schedule_item_id} {self.date}>'
+
+
 class AttendanceRecord(db.Model):
     """Пропуск студента за конкретный день.
 
@@ -392,7 +441,7 @@ class AttendanceRecord(db.Model):
     REASON_LABELS = {
         REASON_ILLNESS: 'Болезнь',
         REASON_EXCUSED: 'Уважительная причина',
-        REASON_UNEXCUSED: 'По уважительной причине нет',
+        REASON_UNEXCUSED: 'Без уважительной причины',
     }
 
     def is_absent_without_reason(self):

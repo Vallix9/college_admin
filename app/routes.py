@@ -8,9 +8,13 @@ from sqlalchemy import or_, func, desc
 from functools import wraps
 import os
 from app.init_ import db
-from app.models import User, Student, Group, Subject, Grade, SystemSettings
+from app.models import (User, Student, Group, Subject, Grade, SystemSettings,
+                        AcademicPeriod, ScheduleItem, LessonDate)
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountPasswordForm
+from app.forms import PeriodForm, PeriodGenerateForm, ScheduleItemForm, DeleteTokenForm
+from app.forms import ScheduleDayForm, LessonDateForm
+from app.utils import build_periods, parse_academic_year, teacher_choices
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
 from app.utils import get_logger, average_grade, build_import_template
@@ -206,15 +210,50 @@ def home_url():
     return url_for('main.dashboard')
 
 
-def teacher_choices():
-    """Список сотрудников, которым можно назначить предмет.
+def selected_date_from(source):
+    """Дата из формы или запроса; пустая строка, если её нет."""
+    raw = (source.form.get('date') or source.args.get('date') or '').strip()
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date().strftime('%Y-%m-%d')
+    except (ValueError, TypeError):
+        return ''
 
-    Преподаватель в списке не видит: он назначает предмет только себе.
+
+def schedule_conflict(group_id, day, lesson, teacher_id, item_id=None):
+    """Ищет конфликт занятия. Возвращает текст ошибки или None.
+
+    Две проверки, и обе нужны: у группы не может быть двух пар в одной
+    ячейке (это ещё и ловит уникальный индекс), и у преподавателя не может
+    быть двух пар в один момент в разных группах — это проверяется только
+    здесь, ограничение в базе через внешние таблицы не выразить.
     """
-    query = User.query.filter(User.role.in_([User.ROLE_ADMIN, User.ROLE_TEACHER]))
-    return [(0, '— не назначен —')] + [
-        (user.id, f'{user.display_name} ({user.role_label})')
-        for user in query.order_by(User.username).all()]
+    if teacher_id:
+        query = ScheduleItem.query.filter(
+            ScheduleItem.teacher_id == teacher_id,
+            ScheduleItem.day_of_week == day,
+            ScheduleItem.lesson_number == lesson)
+        if item_id:
+            query = query.filter(ScheduleItem.id != item_id)
+        other = query.join(Group).first()
+        if other:
+            return (f'Преподаватель уже занят в это время: {ScheduleItem.DAY_SHORT.get(day, day)}, '
+                    f'пара {lesson}, группа {other.group.name}')
+
+    query = ScheduleItem.query.filter(
+        ScheduleItem.group_id == group_id,
+        ScheduleItem.day_of_week == day,
+        ScheduleItem.lesson_number == lesson)
+    if item_id:
+        query = query.filter(ScheduleItem.id != item_id)
+    own = query.first()
+    if own:
+        return (f'В расписании группы уже есть пара на этом месте: '
+                f'{own.subject.name}')
+    return None
+
+
+# teacher_choices живёт в app.utils: он нужен и формам, а формы не должны
+# импортировать маршруты (циклический импорт).
 
 # ===================== АУТЕНТИФИКАЦИЯ =====================
 @main.route('/')
@@ -859,6 +898,396 @@ def delete_grade(id):
         flash_msg('error', f'Ошибка удаления оценки: {str(e)}')
     return redirect(url_for('main.grades'))
 
+# ===================== УЧЕБНЫЕ ПЕРИОДЫ =====================
+@main.route('/periods')
+@staff_required
+def periods():
+    """Список учебных периодов, сгруппированный по учебным годам."""
+    settings = SystemSettings.get_settings()
+    current_year = settings.academic_year
+    # Сразу разворачиваем строки в строки: по_year собран по str, и шаблон
+    # ищет by_year.get(year) — с объектами Row поиск всегда давал бы None
+    years = [row[0] for row in
+             (db.session.query(AcademicPeriod.academic_year)
+              .distinct()
+              .order_by(AcademicPeriod.academic_year.desc()).all())]
+    if current_year and current_year not in years:
+        years = [current_year] + years
+
+    all_periods = (AcademicPeriod.query
+                   .order_by(AcademicPeriod.academic_year.desc(),
+                             AcademicPeriod.sort_order).all())
+    # Счётчики собираем одним запросом по всем периодам сразу: иначе
+    # count() на каждую строку таблицы — это N+1
+    grade_counts = dict(
+        db.session.query(Grade.period_id, func.count(Grade.id))
+        .filter(Grade.period_id.isnot(None))
+        .group_by(Grade.period_id).all())
+    by_year = {}
+    for period in all_periods:
+        by_year.setdefault(period.academic_year, []).append(period)
+
+    # Отдельная форма-«пустышка» ради токена: кнопки удаления в таблице
+    # не являются FlaskForm, а CSRF-токен должен прийти из формы
+    delete_form = DeleteTokenForm()
+    return render_template('periods.html', years=years, by_year=by_year,
+                           current_year=current_year,
+                           grade_counts=grade_counts,
+                           delete_token=delete_form.csrf_token,
+                           period_kind=settings.period_kind,
+                           period_kind_labels=SystemSettings.PERIOD_KIND_LABELS)
+
+
+@main.route('/periods/add', methods=['GET', 'POST'])
+@admin_required
+def add_period():
+    form = PeriodForm()
+    if form.validate_on_submit():
+        clash = AcademicPeriod.query.filter_by(
+            academic_year=form.academic_year.data,
+            sort_order=form.sort_order.data).first()
+        if clash:
+            flash_msg('error', f'Период с номером {form.sort_order.data} '
+                               f'в {form.academic_year.data} уже есть: {clash.name}')
+            return render_template('period_form.html', form=form,
+                                   title='Добавить период', period=None)
+
+        period = AcademicPeriod(
+            name=form.name.data,
+            academic_year=form.academic_year.data,
+            start_date=form.start_date.data,
+            end_date=form.end_date.data,
+            sort_order=form.sort_order.data,
+            kind=form.kind.data,
+            is_annual=form.is_annual.data)
+        db.session.add(period)
+        try:
+            db.session.commit()
+            log.info('Добавлен учебный период: %s %s — %s',
+                     period.name, period.academic_year, current_user.username)
+            flash_msg('success', f'Период «{period.name}» добавлен')
+            return redirect(url_for('main.periods'))
+        except IntegrityError:
+            db.session.rollback()
+            flash_msg('error', 'Такой период уже есть')
+    return render_template('period_form.html', form=form,
+                           title='Добавить период', period=None)
+
+
+@main.route('/periods/<int:id>/edit', methods=['GET', 'POST'])
+@admin_required
+def edit_period(id):
+    period = AcademicPeriod.query.get_or_404(id)
+    form = PeriodForm(obj=period)
+    if form.validate_on_submit():
+        clash = AcademicPeriod.query.filter(
+            AcademicPeriod.academic_year == form.academic_year.data,
+            AcademicPeriod.sort_order == form.sort_order.data,
+            AcademicPeriod.id != period.id).first()
+        if clash:
+            flash_msg('error', f'Период с номером {form.sort_order.data} '
+                               f'в {form.academic_year.data} уже есть: {clash.name}')
+            return render_template('period_form.html', form=form,
+                                   title='Редактировать период', period=period)
+
+        form.populate_obj(period)
+        try:
+            db.session.commit()
+            log.info('Изменён учебный период: %s — %s',
+                     period.name, current_user.username)
+            flash_msg('success', f'Период «{period.name}» обновлён')
+            return redirect(url_for('main.periods'))
+        except IntegrityError:
+            db.session.rollback()
+            flash_msg('error', 'Такой период уже есть')
+    return render_template('period_form.html', form=form,
+                           title='Редактировать период', period=period)
+
+
+@main.route('/periods/<int:id>/delete', methods=['POST'])
+@admin_required
+def delete_period(id):
+    period = AcademicPeriod.query.get_or_404(id)
+    grades_count = Grade.query.filter_by(period_id=period.id).count()
+    if grades_count:
+        # Период с оценками удалять нельзя: оценки остались бы висеть
+        # на несуществующем периоде, и фильтр журнала потерял бы их
+        log.warning('Попытка удалить период %s с оценками: %s — %s',
+                    period.name, grades_count, current_user.username)
+        flash_msg('error', f'Нельзя удалить период «{period.name}»: '
+                           f'в нём {grades_count} оценок')
+        return redirect(url_for('main.periods'))
+
+    name, year = period.name, period.academic_year
+    db.session.delete(period)
+    db.session.commit()
+    log.warning('Удалён учебный период: %s %s — %s', name, year, current_user.username)
+    flash_msg('success', f'Период «{name}» удалён')
+    return redirect(url_for('main.periods'))
+
+
+@main.route('/periods/generate', methods=['GET', 'POST'])
+@admin_required
+def generate_periods():
+    """Автосоздание периодов учебного года по шаблону."""
+    settings = SystemSettings.get_settings()
+    form = PeriodGenerateForm(academic_year=settings.academic_year,
+                              kind=settings.period_kind)
+    if form.validate_on_submit():
+        try:
+            template = build_periods(form.academic_year.data, form.kind.data)
+        except ValueError as e:
+            flash_msg('error', str(e))
+            return redirect(url_for('main.generate_periods'))
+
+        # Уже созданные номера пропускаем, а не падаем: повторное нажатие
+        # кнопки не должно ломать базу
+        existing = {row[0] for row in db.session.query(AcademicPeriod.sort_order)
+                    .filter_by(academic_year=form.academic_year.data).all()}
+        created, skipped = 0, 0
+        for order, (name, start, end) in enumerate(template, start=1):
+            if order in existing:
+                skipped += 1
+                continue
+            db.session.add(AcademicPeriod(
+                name=name, academic_year=form.academic_year.data,
+                start_date=start, end_date=end,
+                sort_order=order, kind=form.kind.data, is_annual=False))
+            created += 1
+        db.session.commit()
+        log.info('Созданы учебные периоды: %d за %s (%s) — %s',
+                 created, form.academic_year.data, form.kind.data,
+                 current_user.username)
+        message = f'Создано периодов: {created}'
+        if skipped:
+            message += f' (пропущено уже существовавших: {skipped})'
+        flash_msg('success', message)
+        return redirect(url_for('main.periods'))
+
+    return render_template('periods_generate.html', form=form,
+                           settings=settings,
+                           period_kind_labels=SystemSettings.PERIOD_KIND_LABELS)
+
+
+# ===================== РАСПИСАНИЕ =====================
+@main.route('/schedule')
+@staff_required
+def schedule():
+    """Сетка расписания: строки — дни недели, столбцы — номера пар."""
+    groups_list = Group.query.order_by(Group.name).all()
+    if not groups_list:
+        flash_msg('warning', 'Сначала создайте хотя бы одну группу')
+        return redirect(url_for('main.groups'))
+
+    group_id = request.args.get('group_id', type=int)
+    if not group_id or group_id not in [g.id for g in groups_list]:
+        group_id = groups_list[0].id
+    # Берём группу из уже загруженного списка: отдельный get() — лишний SELECT
+    group = next(g for g in groups_list if g.id == group_id)
+
+    lesson_date = request.args.get('date', type=str)
+    try:
+        selected_date = datetime.strptime(lesson_date, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        selected_date = date.today()
+
+    items = (ScheduleItem.query
+             .filter_by(group_id=group.id)
+             .options(joinedload(ScheduleItem.subject),
+                      joinedload(ScheduleItem.teacher))
+             .all())
+    grid = {(item.day_of_week, item.lesson_number): item for item in items}
+    max_lesson = max([item.lesson_number for item in items] or [1])
+
+    # Отметки «занятие состоялось» — одним запросом на выбранную дату
+    marked = {}
+    if selected_date:
+        rows = (LessonDate.query
+                .join(LessonDate.schedule_item)
+                .filter(LessonDate.date == selected_date,
+                        ScheduleItem.group_id == group.id).all())
+        marked = {row.schedule_item_id for row in rows}
+
+    day_form = ScheduleDayForm(group_id=group.id,
+                               day_of_week=selected_date.weekday() + 1)
+    lesson_form = LessonDateForm(group_id=group.id, date=selected_date)
+    lesson_form.item_ids.choices = [
+        (item.id, f'Пара {item.lesson_number} — {item.subject.name}')
+        for item in sorted(items, key=lambda i: i.lesson_number)]
+    for choice_id in marked:
+        lesson_form.item_ids.data = list(lesson_form.item_ids.data or []) + [choice_id]
+
+    # Конфликты преподавателей по всей базе: их видно сразу, а не по одному.
+    # joinedload обязателен — в шаблоне у конфликтной пары читаются
+    # subject/teacher/group, и без прогревки это N+1 по числу конфликтов.
+    slots = {}
+    for item in (ScheduleItem.query
+                 .options(joinedload(ScheduleItem.subject),
+                          joinedload(ScheduleItem.teacher),
+                          joinedload(ScheduleItem.group))):
+        slots.setdefault((item.teacher_id, item.day_of_week, item.lesson_number),
+                         []).append(item)
+
+    return render_template(
+        'schedule.html', groups=groups_list, group=group, grid=grid,
+        max_lesson=max_lesson, selected_date=selected_date, marked=marked,
+        day_form=day_form, lesson_form=lesson_form,
+        delete_token=DeleteTokenForm().csrf_token,
+        lessons_per_day=8, slots=slots,
+        subjects=Subject.query.order_by(Subject.name).all(),
+        teachers=teacher_choices(),
+        week_days=ScheduleItem.DAY_LABELS,
+        is_admin=current_user.is_admin)
+
+
+@main.route('/schedule/add', methods=['POST'])
+@admin_required
+def add_schedule_item():
+    form = ScheduleItemForm()
+    if not form.validate_on_submit():
+        flash_msg('error', 'Проверьте заполнение полей')
+        return redirect(url_for('main.schedule',
+                                group_id=request.form.get('group_id')))
+
+    subject = db.session.get(Subject, form.subject_id.data)
+    teacher_id = form.teacher_id.data or (subject.teacher_id if subject else None)
+    conflict = schedule_conflict(form.group_id.data, form.day_of_week.data,
+                                 form.lesson_number.data, teacher_id)
+    if conflict:
+        flash_msg('error', conflict)
+        return redirect(url_for('main.schedule', group_id=form.group_id.data))
+
+    item = ScheduleItem(
+        group_id=form.group_id.data, subject_id=form.subject_id.data,
+        day_of_week=form.day_of_week.data,
+        lesson_number=form.lesson_number.data,
+        teacher_id=teacher_id, room=form.room.data or None)
+    db.session.add(item)
+    try:
+        db.session.commit()
+        log.info('Добавлено занятие: %s, %s, пара %d — %s',
+                 db.session.get(Group, item.group_id).name,
+                 ScheduleItem.DAY_LABELS.get(item.day_of_week), item.lesson_number,
+                 current_user.username)
+        flash_msg('success', 'Занятие добавлено в расписание')
+    except IntegrityError:
+        db.session.rollback()
+        flash_msg('error', 'В этой ячейке расписания уже есть занятие')
+    return redirect(url_for('main.schedule', group_id=form.group_id.data))
+
+
+@main.route('/schedule/day', methods=['POST'])
+@admin_required
+def fill_schedule_day():
+    """Массовое заполнение дня: один предмет на диапазон пар."""
+    form = ScheduleDayForm()
+    if not form.validate_on_submit():
+        flash_msg('error', 'Проверьте заполнение полей')
+        return redirect(url_for('main.schedule',
+                                group_id=request.form.get('group_id')))
+
+    subject = db.session.get(Subject, form.subject_id.data)
+    teacher_id = form.teacher_id.data or (subject.teacher_id if subject else None)
+    group = db.session.get(Group, form.group_id.data)
+
+    created, conflicts = 0, []
+    for lesson in range(form.first_lesson.data, form.last_lesson.data + 1):
+        conflict = schedule_conflict(group.id, form.day_of_week.data,
+                                     lesson, teacher_id)
+        if conflict:
+            conflicts.append(f'пара {lesson} — {conflict}')
+            continue
+        db.session.add(ScheduleItem(
+            group_id=group.id, subject_id=subject.id,
+            day_of_week=form.day_of_week.data, lesson_number=lesson,
+            teacher_id=teacher_id, room=form.room.data or None))
+        created += 1
+    db.session.commit()
+
+    log.info('Массовое заполнение расписания: %s, %s, пар %d-%d, создано %d, '
+             'конфликтов %d — %s', group.name,
+             ScheduleItem.DAY_LABELS.get(form.day_of_week.data),
+             form.first_lesson.data, form.last_lesson.data, created,
+             len(conflicts), current_user.username)
+    if created and not conflicts:
+        flash_msg('success', f'Добавлено занятий: {created}')
+    elif created and conflicts:
+        flash_msg('warning', f'Добавлено занятий: {created}. '
+                             f'Пропущено из-за конфликтов: {len(conflicts)} — '
+                             + '; '.join(conflicts))
+    else:
+        flash_msg('error', 'Ничего не добавлено: ' + '; '.join(conflicts))
+
+    return redirect(url_for('main.schedule', group_id=group.id,
+                            date=selected_date_from(request)))
+
+
+@main.route('/schedule/<int:id>/delete', methods=['POST'])
+@admin_required
+def delete_schedule_item(id):
+    item = ScheduleItem.query.get_or_404(id)
+    group_id = item.group_id
+    # Отметки о состоявшихся занятиях — вместе со слотом
+    LessonDate.query.filter_by(schedule_item_id=item.id).delete(
+        synchronize_session=False)
+    db.session.delete(item)
+    db.session.commit()
+    log.warning('Удалено занятие из расписания: id %d — %s', id, current_user.username)
+    flash_msg('success', 'Занятие удалено из расписания')
+    return redirect(url_for('main.schedule', group_id=group_id,
+                            date=selected_date_from(request)))
+
+
+@main.route('/schedule/lessons', methods=['POST'])
+@admin_required
+def mark_lessons():
+    """Отметка «занятие состоялось» за конкретную дату."""
+    form = LessonDateForm()
+    if not form.validate_on_submit():
+        flash_msg('error', 'Проверьте дату и группу')
+        return redirect(url_for('main.schedule', group_id=request.form.get('group_id')))
+
+    group = db.session.get(Group, form.group_id.data)
+    day = form.date.data.weekday() + 1
+    slots = (ScheduleItem.query
+             .filter_by(group_id=group.id, day_of_week=day).all())
+
+    wanted = set()
+    if form.mark_all.data:
+        wanted = {item.id for item in slots}
+    else:
+        # Только слоты этой группы: иначе можно было бы отметить чужое занятие
+        picked = set(form.item_ids.data or [])
+        wanted = {item.id for item in slots if item.id in picked}
+
+    existing = {row.schedule_item_id for row in
+                LessonDate.query.filter(LessonDate.date == form.date.data).all()}
+    created = [item for item in wanted if item not in existing]
+    for item_id in created:
+        db.session.add(LessonDate(schedule_item_id=item_id,
+                                  date=form.date.data,
+                                  created_by=current_user.id))
+    removed = [item for item in existing
+               if item in {s.id for s in slots} and item not in wanted]
+    if removed:
+        LessonDate.query.filter(
+            LessonDate.date == form.date.data,
+            LessonDate.schedule_item_id.in_(removed)).delete(
+                synchronize_session=False)
+
+    db.session.commit()
+    log.info('Отметки о занятиях на %s, группа %s: добавлено %d, снято %d — %s',
+             form.date.data, group.name, len(created), len(removed),
+             current_user.username)
+    message = f'Отмечено занятий: {len(created)}'
+    if removed:
+        message += f', снято отметок: {len(removed)}'
+    flash_msg('success', message)
+
+    return redirect(url_for('main.schedule', group_id=group.id,
+                            date=form.date.data.strftime('%Y-%m-%d')))
+
+
 # ===================== СОТРУДНИКИ =====================
 @main.route('/staff')
 @admin_required
@@ -1259,6 +1688,7 @@ def settings():
     if form.validate_on_submit():
         changed = []
         for field in ('college_name', 'academic_year', 'max_students_per_group',
+                      'period_kind',
                       'theme_color', 'items_per_page', 'export_format',
                       'auto_backup', 'backup_frequency',
                       'enable_system_notifications', 'enable_email_notifications'):

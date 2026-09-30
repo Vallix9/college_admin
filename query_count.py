@@ -24,7 +24,8 @@ app.config['TESTING'] = True
 with app.app_context():
     engine = app.extensions['sqlalchemy'].engine
 
-PAGES = ['/', '/students', '/groups', '/subjects', '/grades', '/reports', '/settings']
+PAGES = ['/', '/students', '/groups', '/subjects', '/grades', '/reports', '/settings',
+         '/periods', '/schedule']
 
 with app.test_client() as client:
     html = client.get('/login').get_data(as_text=True)

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Создать периоды{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.periods') }}">Учебные периоды</a></li>
+<li class="breadcrumb-item active">Создать по шаблону</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-magic me-2"></i>Создать периоды по шаблону
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="form-card">
+            <div class="form-header">
+                <h2><i class="bi bi-calendar-range text-success"></i> Автосоздание</h2>
+                <p class="text-muted mb-0">
+                    Периоды создаются по типовым границам колледжа
+                </p>
+            </div>
+
+            <form method="POST" action="" novalidate>
+                {{ form.hidden_tag() }}
+
+                <div class="mb-3">
+                    <label for="academic_year" class="form-label">
+                        <i class="bi bi-calendar me-1"></i> {{ form.academic_year.label.text }}
+                    </label>
+                    {{ form.academic_year(class="form-control", placeholder="2026-2027") }}
+                    {% for error in form.academic_year.errors %}
+                    <div class="text-danger mt-1">
+                        <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label for="kind" class="form-label">
+                        <i class="bi bi-list-ol me-1"></i> {{ form.kind.label.text }}
+                    </label>
+                    {{ form.kind(class="form-select") }}
+                    <div class="form-text">
+                        Сейчас в настройках: {{ period_kind_labels[settings.period_kind] }}
+                    </div>
+                </div>
+
+                <div class="alert alert-info">
+                    <h6 class="alert-heading">
+                        <i class="bi bi-info-circle"></i> Что будет создано
+                    </h6>
+                    {% if form.kind.data == 'semester' %}
+                    <ul class="mb-0 small">
+                        <li><strong>I семестр</strong> — 1 сентября — 15 января</li>
+                        <li><strong>II семестр</strong> — 16 января — 30 июня</li>
+                    </ul>
+                    {% else %}
+                    <ul class="mb-0 small">
+                        <li><strong>I четверть</strong> — 1 сентября — 25 декабря</li>
+                        <li><strong>II четверть</strong> — 26 декабря — 15 марта</li>
+                        <li><strong>III четверть</strong> — 16 марта — 5 июня</li>
+                        <li><strong>IV четверть</strong> — 6 июня — 31 августа</li>
+                    </ul>
+                    {% endif %}
+                </div>
+
+                <div class="alert alert-warning small">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Уже созданные в этом году периоды будут пропущены — даты
+                    создаваемых периодов останутся типовыми, их можно поправить
+                    вручную после создания.
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+                    <a href="{{ url_for('main.periods') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-left"></i> Назад
+                    </a>
+                    {{ form.submit(class="btn btn-success px-4") }}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

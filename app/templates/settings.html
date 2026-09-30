@@ -50,6 +50,19 @@
                             {% endfor %}
                         </div>
                     </div>
+
+                    <div class="mb-3">
+                        {{ form.period_kind.label(class="form-label") }}
+                        {{ form.period_kind(class="form-select" + (" is-invalid" if form.period_kind.errors else "")) }}
+                        <div class="form-text">
+                            Используется при автосоздании периодов
+                            <a href="{{ url_for('main.generate_periods') }}">по шаблону</a>.
+                            Уже созданные периоды не меняются.
+                        </div>
+                        {% for e in form.period_kind.errors %}
+                            <div class="invalid-feedback d-block">{{ e }}</div>
+                        {% endfor %}
+                    </div>
                 </div>
             </div>
 

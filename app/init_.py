@@ -100,6 +100,10 @@ def nav_items_for(user):
         {'endpoint': 'main.groups', 'icon': 'bi-collection', 'label': 'Группы'},
         {'endpoint': 'main.subjects', 'icon': 'bi-book', 'label': 'Предметы'},
         {'endpoint': 'main.grades', 'icon': 'bi-journal-check', 'label': 'Оценки'},
+        {'endpoint': 'main.periods', 'icon': 'bi-calendar-range',
+         'label': 'Периоды'},
+        {'endpoint': 'main.schedule', 'icon': 'bi-calendar-week',
+         'label': 'Расписание'},
         {'endpoint': 'main.reports', 'icon': 'bi-file-earmark-bar-graph',
          'label': 'Отчёты'},
     ]

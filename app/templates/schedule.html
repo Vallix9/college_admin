@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Расписание{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Расписание</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-calendar-week"></i>Расписание
+{% endblock %}
+
+{% block header_actions %}
+{% if is_admin %}
+<button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#fillDayModal">
+    <i class="bi bi-grid-3x3"></i> Заполнить день
+</button>
+<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addItemModal">
+    <i class="bi bi-plus-circle"></i> Добавить пару
+</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<style>
+.schedule-grid td { min-width: 130px; }
+.schedule-cell {
+    border-left: 3px solid #dee2e6;
+    padding: 4px 6px;
+    border-radius: 4px;
+}
+.schedule-conflict { border-left-color: #dc3545; background: #fff5f5; }
+.schedule-held { border-left-color: #198754; background: #f0fff4; }
+</style>
+
+<form method="GET" class="row g-2 align-items-end mb-3">
+    <div class="col-md-4">
+        <label for="group_id" class="form-label">Группа</label>
+        <select name="group_id" id="group_id" class="form-select" onchange="this.form.submit()">
+            {% for g in groups %}
+            <option value="{{ g.id }}" {% if g.id == group.id %}selected{% endif %}>{{ g.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label for="date" class="form-label">Отметки занятий на дату</label>
+        <div class="input-group">
+            <input type="date" name="date" id="date" class="form-control"
+                   value="{{ selected_date.strftime('%Y-%m-%d') }}">
+            <button class="btn btn-outline-secondary" type="submit">Показать</button>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="text-muted small">
+            {% if selected_date.weekday() < 5 %}
+            <i class="bi bi-calendar-check text-success"></i>
+            {% else %}
+            <i class="bi bi-calendar-x text-secondary"></i>
+            {% endif %}
+            {{ ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][selected_date.weekday()] }},
+            {{ selected_date.strftime('%d.%m.%Y') }}
+        </div>
+    </div>
+</form>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">{{ group.name }} — недельное расписание</h5>
+        <span class="text-muted small">
+            {{ grid|length }} из {{ lessons_per_day * 5 }} возможных пар
+        </span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-bordered mb-0 align-middle schedule-grid">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 110px;">Пара</th>
+                    {% for day in range(1, 6) %}
+                    <th class="text-center">{{ week_days[day] }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for lesson in range(1, max_lesson + 1) %}
+                <tr>
+                    <th class="text-center table-light">№ {{ lesson }}</th>
+                    {% for day in range(1, 6) %}
+                    {% set item = grid.get((day, lesson)) %}
+                    <td class="p-1">
+                        {% if item %}
+                        {% set clash = slots.get((item.teacher_id, item.day_of_week, item.lesson_number), []) %}
+                        <div class="schedule-cell
+                                    {% if clash|length > 1 %}schedule-conflict{% endif %}
+                                    {% if item.id in marked %}schedule-held{% endif %}">
+                            <div class="fw-semibold small">{{ item.subject.name }}</div>
+                            {% if item.teacher %}
+                            <div class="text-muted small">{{ item.teacher.display_name }}</div>
+                            {% endif %}
+                            <div class="d-flex justify-content-between align-items-center mt-1">
+                                <span class="text-muted small">
+                                    {% if item.room %}{{ item.room }}{% endif %}
+                                </span>
+                                {% if clash|length > 1 %}
+                                <span class="badge bg-danger" title="Преподаватель назначен в несколько групп одновременно">
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                </span>
+                                {% endif %}
+                            </div>
+                            {% if is_admin %}
+                            <form method="POST"
+                                  action="{{ url_for('main.delete_schedule_item', id=item.id) }}"
+                                  class="mt-1">
+                                <input type="hidden" name="csrf_token" value="{{ delete_token }}">
+                                <input type="hidden" name="date" value="{{ selected_date.strftime('%Y-%m-%d') }}">
+                                <button class="btn btn-sm btn-outline-danger w-100 py-0"
+                                        onclick="return confirm('Удалить пару {{ item.subject.name }} ({{ week_days[item.day_of_week] }}, пара {{ item.lesson_number }})?')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <div class="text-center text-muted small py-2">—</div>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header">
+        <h5 class="mb-0">
+            <i class="bi bi-check2-square"></i> Занятие состоялось
+        </h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Отметьте пары, которые состоялись {{ selected_date.strftime('%d.%m.%Y') }}.
+            Журнал (Фаза 8) строит колонки только по этим датам — без отметок
+            сетка не знает, какие дни были рабочими.
+        </p>
+        <form method="POST" action="{{ url_for('main.mark_lessons') }}">
+            {{ lesson_form.hidden_tag() }}
+            <input type="hidden" name="group_id" value="{{ group.id }}">
+            <input type="hidden" name="date" value="{{ selected_date.strftime('%Y-%m-%d') }}">
+
+            {% if lesson_form.item_ids.choices %}
+            <div class="row">
+                {% for choice in lesson_form.item_ids %}
+                <div class="col-md-6 col-lg-4 mb-2">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox"
+                               name="{{ lesson_form.item_ids.name }}" value="{{ choice.data }}"
+                               id="lesson-{{ choice.data }}"
+                               {% if choice.data in lesson_form.item_ids.data %}checked{% endif %}>
+                        <label class="form-check-label small" for="lesson-{{ choice.data }}">
+                            {{ choice.label }}
+                        </label>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            {% if is_admin %}
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox"
+                       name="mark_all" id="mark_all" value="y">
+                <label class="form-check-label" for="mark_all">
+                    {{ lesson_form.mark_all.label.text }}
+                </label>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button class="btn btn-success">
+                    <i class="bi bi-check2"></i> Сохранить отметки
+                </button>
+                <a href="{{ url_for('main.schedule', group_id=group.id) }}"
+                   class="btn btn-outline-secondary">Снять все</a>
+            </div>
+            {% else %}
+            <p class="text-muted small mb-0">
+                Отметки выставляет администратор. Преподаватель видит таблицу,
+                но править её не может.
+            </p>
+            {% endif %}
+            {% else %}
+            <p class="text-muted mb-0">
+                В расписании группы нет занятий в этот день недели.
+            </p>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+{% if is_admin %}
+<div class="modal fade" id="addItemModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.add_schedule_item') }}">
+                <input type="hidden" name="csrf_token" value="{{ day_form.csrf_token }}">
+                <input type="hidden" name="group_id" value="{{ group.id }}">
+                <input type="hidden" name="date" value="{{ selected_date.strftime('%Y-%m-%d') }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle"></i> Новая пара</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Предмет</label>
+                        <select name="subject_id" class="form-select" required>
+                            <option value="">— выберите —</option>
+                            {% for s in subjects %}
+                            <option value="{{ s.id }}">{{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label">День недели</label>
+                            <select name="day_of_week" class="form-select" required>
+                                {% for day, label in week_days.items() %}
+                                {% if day <= 5 %}
+                                <option value="{{ day }}"
+                                    {% if day == selected_date.weekday() + 1 %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label">Номер пары</label>
+                            <input type="number" name="lesson_number" class="form-control"
+                                   min="1" max="8" value="1" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Преподаватель</label>
+                        <select name="teacher_id" class="form-select">
+                            <option value="">— как у предмета —</option>
+                            {% for t_id, t_name in teachers %}
+                            <option value="{{ t_id }}">{{ t_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Кабинет</label>
+                        <input type="text" name="room" class="form-control" maxlength="20"
+                               placeholder="например, 204">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-primary">Добавить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="fillDayModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.fill_schedule_day') }}">
+                <input type="hidden" name="csrf_token" value="{{ day_form.csrf_token }}">
+                <input type="hidden" name="date" value="{{ selected_date.strftime('%Y-%m-%d') }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-grid-3x3"></i> Заполнить день</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Группа</label>
+                        <select name="group_id" class="form-select" required>
+                            {% for g in groups %}
+                            <option value="{{ g.id }}" {% if g.id == group.id %}selected{% endif %}>
+                                {{ g.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Предмет</label>
+                        <select name="subject_id" class="form-select" required>
+                            <option value="">— выберите —</option>
+                            {% for s in subjects %}
+                            <option value="{{ s.id }}">{{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label">День недели</label>
+                            <select name="day_of_week" class="form-select" required>
+                                {% for day, label in week_days.items() %}
+                                {% if day <= 5 %}
+                                <option value="{{ day }}"
+                                    {% if day == selected_date.weekday() + 1 %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label">Кабинет</label>
+                            <input type="text" name="room" class="form-control" maxlength="20">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label">С первой пары</label>
+                            <input type="number" name="first_lesson" class="form-control"
+                                   min="1" max="8" value="1" required>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label">По последнюю пару</label>
+                            <input type="number" name="last_lesson" class="form-control"
+                                   min="1" max="8" value="2" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Преподаватель</label>
+                        <select name="teacher_id" class="form-select">
+                            <option value="">— как у предмета —</option>
+                            {% for t_id, t_name in teachers %}
+                            <option value="{{ t_id }}">{{ t_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="alert alert-warning small mb-0">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Занятые ячейки и конфликты преподавателя будут пропущены —
+                        они перечисляются в сообщении после заполнения.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-success">Заполнить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

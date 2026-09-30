@@ -27,7 +27,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from app.init_ import create_app, db
 from app.models import (User, Group, Student, Subject, Grade, SystemSettings,
-                        AcademicPeriod, ScheduleItem, AttendanceRecord)
+                        AcademicPeriod, ScheduleItem, AttendanceRecord,
+                        LessonDate)
 from migrations import apply_schema
 
 from config import load_env_file
@@ -255,6 +256,45 @@ def assign_subjects_to_teachers(teachers):
         print('ℹ️  Все предметы уже закреплены')
 
 
+def ensure_lesson_dates():
+    """Отмечает состоявшиеся занятия текущего периода.
+
+    Без них сетка журнала Фазы 8 не знает, какие даты рабочие, и период
+    выглядит пустым. Отмечаем будни от начала периода до сегодняшнего дня —
+    это правдоподобно: учебный год в сентябре, до занятий ещё не все даты.
+    """
+    if LessonDate.query.first():
+        print('ℹ️  Отметки о состоявшихся занятиях уже созданы')
+        return
+
+    period = AcademicPeriod.query.filter(
+        AcademicPeriod.start_date <= date.today(),
+        AcademicPeriod.end_date >= date.today()).order_by(
+        AcademicPeriod.sort_order).first()
+    if period is None:
+        print('ℹ️  Текущего периода нет — отметки не созданы')
+        return
+
+    # Ограничиваем окно 45 днями: за год четверти набегает 600+ занятий на
+    # 24 студента, и сид перестаёт быть обозримым. Журнал Фазы 8 всё равно
+    # показывает месяц, а не весь период.
+    start = max(period.start_date, date.today() - timedelta(days=45))
+    items = ScheduleItem.query.all()
+    marked = 0
+    day = start
+    while day <= min(period.end_date, date.today()):
+        weekday = day.weekday() + 1
+        for item in items:
+            if item.day_of_week == weekday:
+                db.session.add(LessonDate(schedule_item_id=item.id, date=day))
+                marked += 1
+        day += timedelta(days=1)
+
+    db.session.commit()
+    print(f'✅ Отмечено состоявшихся занятий: {marked} '
+          f'({period.name}, с {start.strftime("%d.%m.%Y")})')
+
+
 def ensure_schedule(groups, subjects):
     """Заполняет недельное расписание для каждой группы.
 
@@ -464,6 +504,7 @@ def main():
 
         students = ensure_students()
         ensure_student_accounts(students)
+        ensure_lesson_dates()
         ensure_grades()
         ensure_attendance(subjects)
 
@@ -473,7 +514,8 @@ def main():
         print(f'Периодов: {AcademicPeriod.query.count()}, '
               f'занятий: {ScheduleItem.query.count()}')
         print(f'Студентов: {Student.query.count()}, оценок: {Grade.query.count()}, '
-              f'пропусков: {AttendanceRecord.query.count()}')
+              f'пропусков: {AttendanceRecord.query.count()}, '
+              f'отметок о занятиях: {LessonDate.query.count()}')
         with_accounts = Student.query.filter(Student.user_id.isnot(None)).count()
         print(f'С учётными записями: {with_accounts}')
         username = os.environ.get('ADMIN_USERNAME') or DEFAULT_ADMIN_USERNAME

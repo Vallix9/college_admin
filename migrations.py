@@ -35,6 +35,9 @@ COLUMNS = [
     ('user', 'full_name', 'full_name VARCHAR(200)'),
     ('user', 'email', 'email VARCHAR(100)'),
     ('subject', 'teacher_id', 'teacher_id INTEGER'),
+    # Фаза 7: вид периодов (четверти или семестры) и отметки о занятиях
+    ('system_settings', 'period_kind',
+     "period_kind VARCHAR(20) DEFAULT 'quarter' NOT NULL"),
 ]
 
 # Индексы и ограничения, которые create_all() не добавит к уже существующей
@@ -45,6 +48,8 @@ INDEXES = [
     ('ix_grade_student_subject', 'grade', '(student_id, subject_id)'),
     ('ix_attendance_student_date', 'attendance_record', '(student_id, date)'),
     ('ix_grade_history_grade', 'grade_history', '(grade_id)'),
+    # Журнал выбирает рабочие даты одним запросом и сортирует их
+    ('ix_lesson_date_date', 'lesson_date', '(date)'),
 ]
 
 UNIQUE_INDEXES = [
@@ -53,6 +58,8 @@ UNIQUE_INDEXES = [
      '(group_id, day_of_week, lesson_number)'),
     # В учебном году порядок периодов не повторяется
     ('uq_period_year_order', 'academic_period', '(academic_year, sort_order)'),
+    # Одно и то же занятие за одну дату отмечается только раз
+    ('uq_lesson_date', 'lesson_date', '(schedule_item_id, date)'),
 ]
 
 

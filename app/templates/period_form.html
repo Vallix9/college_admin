@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - {{ title }}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item"><a href="{{ url_for('main.periods') }}">Учебные периоды</a></li>
+<li class="breadcrumb-item active">{{ title }}</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-calendar-range me-2"></i>{{ title }}
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="form-card">
+            <div class="form-header">
+                <h2>
+                    {% if period %}
+                        <i class="bi bi-pencil-square text-warning"></i> Редактирование периода
+                    {% else %}
+                        <i class="bi bi-plus-circle text-success"></i> Новый учебный период
+                    {% endif %}
+                </h2>
+                <p class="text-muted mb-0">
+                    Порядковый номер должен быть уникален в пределах учебного года
+                </p>
+            </div>
+
+            <form method="POST" action="" novalidate>
+                {{ form.hidden_tag() }}
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label for="name" class="form-label">
+                            <i class="bi bi-tag me-1"></i> {{ form.name.label.text }}
+                        </label>
+                        {{ form.name(class="form-control", placeholder="I четверть") }}
+                        {% for error in form.name.errors %}
+                        <div class="text-danger mt-1">
+                            <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-md-6 mb-3">
+                        <label for="academic_year" class="form-label">
+                            <i class="bi bi-calendar me-1"></i> {{ form.academic_year.label.text }}
+                        </label>
+                        {{ form.academic_year(class="form-control", placeholder="2026-2027") }}
+                        {% for error in form.academic_year.errors %}
+                        <div class="text-danger mt-1">
+                            <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label for="start_date" class="form-label">
+                            <i class="bi bi-calendar-event me-1"></i> {{ form.start_date.label.text }}
+                        </label>
+                        {{ form.start_date(class="form-control", type="date") }}
+                        {% for error in form.start_date.errors %}
+                        <div class="text-danger mt-1">
+                            <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-md-6 mb-3">
+                        <label for="end_date" class="form-label">
+                            <i class="bi bi-calendar-check me-1"></i> {{ form.end_date.label.text }}
+                        </label>
+                        {{ form.end_date(class="form-control", type="date") }}
+                        {% for error in form.end_date.errors %}
+                        <div class="text-danger mt-1">
+                            <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label for="kind" class="form-label">
+                            <i class="bi bi-list-ol me-1"></i> {{ form.kind.label.text }}
+                        </label>
+                        {{ form.kind(class="form-select") }}
+                    </div>
+
+                    <div class="col-md-6 mb-3">
+                        <label for="sort_order" class="form-label">
+                            <i class="bi bi-sort-down me-1"></i> {{ form.sort_order.label.text }}
+                        </label>
+                        {{ form.sort_order(class="form-control") }}
+                        {% for error in form.sort_order.errors %}
+                        <div class="text-danger mt-1">
+                            <small><i class="bi bi-exclamation-triangle"></i> {{ error }}</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="form-check mb-4">
+                    {{ form.is_annual(class="form-check-input") }}
+                    <label class="form-check-label" for="is_annual">
+                        {{ form.is_annual.label.text }}
+                        <div class="form-text">
+                            Годовой период охватывает весь учебный год целиком
+                        </div>
+                    </label>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+                    <a href="{{ url_for('main.periods') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-left"></i> Назад
+                    </a>
+                    {{ form.submit(class="btn btn-primary px-4") }}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

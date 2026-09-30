@@ -20,7 +20,8 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from app.init_ import create_app, db
-from app.models import User, Student, Group, Subject, Grade
+from app.models import (User, Student, Group, Subject, Grade,
+                        AcademicPeriod, ScheduleItem)
 
 from config import load_env_file
 
@@ -34,6 +35,8 @@ with app.app_context():
     student_id = Student.query.first().id if Student.query.first() else 1
     group_id = Group.query.first().id if Group.query.first() else 1
     subject_id = Subject.query.first().id if Subject.query.first() else 1
+    period_id = (AcademicPeriod.query.first().id
+                 if AcademicPeriod.query.first() else 1)
     grade_id = Grade.query.first().id if Grade.query.first() else 1
     admin_pw = os.environ.get('ADMIN_PASSWORD', 'admin123')
     admin_name = os.environ.get('ADMIN_USERNAME', 'admin')
@@ -70,6 +73,12 @@ PAGES = [
     (f'/subjects/{subject_id}/edit', 'редактирование предмета'),
     ('/grades', 'журнал оценок (старый)'),
     ('/grades/add', 'добавление оценки'),
+    ('/periods', 'учебные периоды'),
+    ('/periods/add', 'добавление периода'),
+    ('/periods/generate', 'автосоздание периодов'),
+    (f'/periods/{period_id}/edit', 'редактирование периода'),
+    ('/schedule', 'расписание'),
+    (f'/schedule?group_id={group_id}', 'расписание группы из параметра'),
     ('/reports', 'отчёты'),
     ('/reports/students', 'отчёт по студентам в Excel'),
     (f'/reports/group/{group_id}', 'отчёт по группе в Excel'),
