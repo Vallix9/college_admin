@@ -1,0 +1,87 @@
+/* Сетка журнала. Bootstrap для такой таблицы не годится: колонок бывает
+   несколько десятков, шапка должна липнуть, а ячейка — быть кликабельной
+   мишенью на всю площадь, а не крошечный бейдж. */
+
+.journal-scroll {
+    max-height: 75vh;
+    overflow: auto;
+}
+
+/* Липкая колонка со студентами: при горизонтальной прокрутке имена должны
+   оставаться на виду, иначе непонятно, кому принадлежит оценка. */
+.journal-grid .journal-sticky {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #fff;
+    border-right: 2px solid #dee2e6;
+    white-space: nowrap;
+}
+
+.journal-grid thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: #f8f9fa;
+    vertical-align: bottom;
+}
+
+.journal-grid thead th.journal-sticky {
+    z-index: 4;
+    background: #f8f9fa;
+}
+
+.journal-grid .student-col {
+    min-width: 190px;
+}
+
+.journal-grid .column-head {
+    min-width: 74px;
+}
+
+/* Дата, в которую кто-то отсутствовал: подсвечиваем колонку целиком,
+   иначе пропуск не видно, а «пустая» ячейка выглядит как забывчивость. */
+.journal-grid .column-absent {
+    background: #fff3cd;
+}
+
+.journal-grid .total-col {
+    min-width: 78px;
+    background: #f1f3f5;
+}
+
+.journal-grid .journal-cell {
+    cursor: pointer;
+    padding: 2px 4px;
+    min-width: 74px;
+    height: 34px;
+}
+
+.journal-grid .cell-empty {
+    background: #fdfdfd;
+}
+
+/* Пунктир по краю пустой ячейки — приглашение кликнуть */
+.journal-grid .cell-empty:hover {
+    background: #eef4ff;
+    box-shadow: inset 0 0 0 1px #6f42c1;
+}
+
+.journal-grid .cell-filled {
+    background: #fff;
+}
+
+.journal-grid .journal-cell:focus {
+    outline: 2px solid #6f42c1;
+    outline-offset: -2px;
+}
+
+.grade-badge {
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.grade-badge:hover {
+    filter: brightness(0.92);
+}

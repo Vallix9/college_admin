@@ -427,6 +427,100 @@ def build_periods(academic_year, kind='quarter'):
             for name, start, end in template]
 
 
+# Значения, которые принимает ячейка журнала. Зачёт/незачёт лежат в одной
+# строке с числами осознанно: вводить их можно вручную, а в среднем балле
+# grade_to_points() переводит их в 5 и 2 — так они учитываются во всех
+# отчётах проекта одинаково.
+GRADE_VALUES = ('2', '3', '4', '5', 'зачет', 'незачет')
+
+# Потолок на количество оценок в одной ячейке. Обычная ячейка — одна-две
+# оценки, десять — уже предел осмысленного; без лимита строка из 300 цифр
+# создала бы 300 Grade за одно занятие.
+GRADE_VALUES_MAX_COUNT = 10
+
+
+def parse_grade_values(raw):
+    """Разбирает строку оценок из журнала: '5, 4, 4' -> ['5', '4', '4'].
+
+    Разделители — запятая, точка с запятой, пробел, дефис. Ведущие нули
+    отбрасываются: «05» -> «5». Синонимы приводятся к значениям из БД:
+    «зачёт/з» -> «зачет», «незачёт/н» -> «незачет».
+
+    Дробных значений нет намеренно: запятая уже занята разделителем, и
+    «4,5» неизбежно распалось бы на «4» и «5» — две оценки вместо одной.
+
+    Неизвестные значения молча выбрасывать нельзя: преподаватель вводит
+    «5, 6, 4», получает две сохранённые оценки и не понимает, что третью
+    потерял. Поэтому поднимается ValueError с перечнем мусора — это
+    требование 8.6. Больше GRADE_VALUES_MAX_COUNT значений подряд тоже
+    ошибка, иначе один промах мыши превращается в сотни оценок за занятие.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        parts = [str(part).strip() for part in raw]
+    else:
+        parts = re.split(r'[,;\s\-–—]+', str(raw).strip())
+
+    values = []
+    invalid = []
+    for part in parts:
+        if not part:
+            continue
+        if re.fullmatch(r'\d+', part):
+            part = str(int(part))
+        else:
+            lowered = part.lower()
+            part = {'зачёт': 'зачет', 'з': 'зачет',
+                    'н': 'незачет', 'незачёт': 'незачет'}.get(lowered, lowered)
+        if part in GRADE_VALUES:
+            values.append(part)
+        else:
+            invalid.append(part)
+
+    if invalid:
+        raise ValueError(
+            f'не распознано: {", ".join(invalid)}. Допустимо: 2, 3, 4, 5, '
+            f'зачет, незачет')
+    if len(values) > GRADE_VALUES_MAX_COUNT:
+        raise ValueError(
+            f'слишком много оценок: {len(values)}, максимум '
+            f'{GRADE_VALUES_MAX_COUNT} за одно занятие')
+    return values
+
+
+def grade_distribution(grades):
+    """Сколько оценок каждого вида: {'5': 3, '4': 7, '2': 1, ...}.
+
+    Зачёт и незачёт считаются отдельными значениями, а не приводятся к
+    баллам: в сводке преподавателю нужно видеть, сколько было именно
+    зачётов, а не сколько из них «пятёрок».
+    """
+    counts = {}
+    for item in grades or ():
+        value = str(getattr(item, 'grade_value', item) or '').strip().lower()
+        if not value:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def journal_totals(cells_by_student):
+    """Средний балл и число оценок по каждому студенту.
+
+    cells_by_student: {student_id: [Grade, ...]} — ровно та структура,
+    которую journal отдаёт в ctx['cells'] после разворачивания в строки.
+    """
+    totals = {}
+    for student_id, grades in (cells_by_student or {}).items():
+        totals[student_id] = {
+            'average': average_grade(grades),
+            'count': len(grades or []),
+            'distribution': grade_distribution(grades),
+        }
+    return totals
+
+
 def teacher_choices():
     """Список сотрудников, которым можно назначить предмет.
 

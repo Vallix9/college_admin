@@ -112,11 +112,16 @@ def prepare():
             subjects.append(subject)
         db.session.commit()
 
-        # Учётная запись студента: берём того, у кого её ещё нет.
-        # Часть аккаунтов выдаёт init_db.py, поэтому «просто первого»
-        # здесь означало бы попытку создать логин, который уже занят.
+        # Учётная запись студента: берём того, у кого её ещё нет, и чей
+        # номер ещё не занят логином. Часть аккаунтов выдаёт init_db.py, а
+        # после неудачного прошлого прогона остаются аккаунты-сироты: тот же
+        # номер может быть свободен в student.user_id и уже существовать
+        # среди логинов, и тогда INSERT падал бы на UNIQUE.
+        taken_logins = {row[0] for row in
+                        (db.session.query(User.username).all())}
         student = (Student.query
                    .filter_by(status='active', user_id=None)
+                   .filter(~Student.student_id.in_(taken_logins))
                    .order_by(Student.id).first())
         if student is None:
             raise RuntimeError('Нет студента без учётной записи — нечего проверять')

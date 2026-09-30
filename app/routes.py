@@ -9,15 +9,18 @@ from functools import wraps
 import os
 from app.init_ import db
 from app.models import (User, Student, Group, Subject, Grade, SystemSettings,
-                        AcademicPeriod, ScheduleItem, LessonDate)
+                        AcademicPeriod, ScheduleItem, LessonDate,
+                        AttendanceRecord, GradeHistory)
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountPasswordForm
 from app.forms import PeriodForm, PeriodGenerateForm, ScheduleItemForm, DeleteTokenForm
 from app.forms import ScheduleDayForm, LessonDateForm
+from app.forms import JournalGradeForm, JournalEditForm
 from app.utils import build_periods, parse_academic_year, teacher_choices
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
 from app.utils import get_logger, average_grade, build_import_template
+from app.utils import grade_distribution, journal_totals
 from app.utils import read_log_lines, get_log_file_path, clear_log_file
 from app.utils import generate_password
 
@@ -1286,6 +1289,488 @@ def mark_lessons():
 
     return redirect(url_for('main.schedule', group_id=group.id,
                             date=form.date.data.strftime('%Y-%m-%d')))
+
+
+# ===================== ЖУРНАЛ =====================
+def _by_student(cells):
+    """{student_id: [Grade, ...]} из cells вида {(student_id, column): [...]}."""
+    result = {}
+    for (student_id, _column), grades in (cells or {}).items():
+        result.setdefault(student_id, []).extend(grades)
+    return result
+
+
+def _absent_dates(attendance, columns):
+    """Даты, в которые кто-то из группы отсутствовал: {дата: True}.
+
+    Нужна шапке сетки, чтобы пропущенные занятия не выглядели как
+    «преподаватель ничего не выставил».
+    """
+    column_set = set(columns or ())
+    return {date for (_student_id, date), records
+            in (attendance or {}).items()
+            if date in column_set and records}
+
+
+def current_period_or_default(period_id=None):
+    """Период из запроса, иначе тот, в который попадает сегодняшняя дата.
+
+    Возвращает (period, error_response): error_response не None, если
+    период не найден или в базе их нет вовсе.
+    """
+    if period_id:
+        period = db.session.get(AcademicPeriod, period_id)
+        if period is None:
+            return None, (render_template(
+                'error.html', code=404,
+                message='Учебный период не найден.'), 404)
+        return period, None
+
+    today = date.today()
+    period = (AcademicPeriod.query
+              .filter(AcademicPeriod.start_date <= today,
+                      AcademicPeriod.end_date >= today)
+              .order_by(AcademicPeriod.sort_order.desc()).first())
+    if period:
+        return period, None
+
+    # Дата вне учебного года (лето, каникулы) — показываем последний период
+    period = (AcademicPeriod.query
+              .order_by(AcademicPeriod.academic_year.desc(),
+                        AcademicPeriod.sort_order.desc()).first())
+    if period:
+        return period, None
+
+    return None, (render_template(
+        'error.html', code=404,
+        message='Сначала создайте хотя бы один учебный период.'), 404)
+
+
+def journal_context(group_id, subject_id, period_id, mode):
+    """Общие выборки для обоих режимов журнала.
+
+    Возвращает (ctx, error_response). Все данные сетки берутся четырьмя
+    запросами независимо от числа студентов и ячеек: иначе на группе из 25
+    человек сетка даёт сотни SELECT.
+    """
+    groups_list = Group.query.order_by(Group.name).all()
+    if not groups_list:
+        return None, (render_template(
+            'error.html', code=404,
+            message='Сначала создайте хотя бы одну группу.'), 404)
+    if group_id not in [g.id for g in groups_list]:
+        group_id = groups_list[0].id
+    group = next(g for g in groups_list if g.id == group_id)
+
+    period, failure = current_period_or_default(period_id)
+    if failure:
+        return None, failure
+
+    # Преподаватель видит только свои предметы: чужой журнал ему не нужен
+    subjects_list = (visible_subjects_query()
+                     .order_by(Subject.name).all())
+    if not subjects_list:
+        return None, (render_template(
+            'error.html', code=403,
+            message='У вас нет предметов для журнала.'), 403)
+    if subject_id:
+        # Явно запрошенный чужой предмет — это 403, а не тихая подмена на
+        # первый доступный: иначе преподаватель с исправленной ссылкой
+        # смотрел бы чужую сетку, не понимая why.
+        if subject_id not in [s.id for s in subjects_list]:
+            return None, (render_template(
+                'error.html', code=403,
+                message='Этот предмет ведёт другой преподаватель.'), 403)
+        subject = next(s for s in subjects_list if s.id == subject_id)
+    else:
+        subject = subjects_list[0]
+
+    periods_list = (AcademicPeriod.query
+                    .filter_by(academic_year=period.academic_year)
+                    .order_by(AcademicPeriod.sort_order).all())
+
+    students = (Student.query
+                .filter_by(group_id=group.id, status='active')
+                .order_by(Student.last_name, Student.first_name).all())
+    student_ids = [s.id for s in students]
+
+    ctx = {
+        'groups': groups_list,
+        'group': group,
+        'subjects': subjects_list,
+        'subject': subject,
+        'period': period,
+        'periods': periods_list,
+        'students': students,
+        'mode': mode,
+        'can_edit': current_user.is_admin or current_user.teaches(subject),
+    }
+
+    if not student_ids:
+        ctx.update(columns=[], cells={}, attendance={}, column_titles=[],
+                   summary={}, by_subject=False)
+        return ctx, None
+
+    # --- Режим 1: столбцы — даты занятий по этому предмету -----------------
+    date_rows = (db.session.query(LessonDate.date)
+                 .join(LessonDate.schedule_item)
+                 .filter(ScheduleItem.group_id == group.id,
+                         ScheduleItem.subject_id == subject.id,
+                         LessonDate.date >= period.start_date,
+                         LessonDate.date <= period.end_date)
+                 .distinct()
+                 .order_by(LessonDate.date).all())
+    columns = [row[0] for row in date_rows]
+
+    grade_rows = (Grade.query
+                  .filter(Grade.student_id.in_(student_ids),
+                          Grade.subject_id == subject.id,
+                          Grade.date >= period.start_date,
+                          Grade.date <= period.end_date)
+                  .order_by(Grade.date, Grade.id).all())
+    cells = {}
+    for grade in grade_rows:
+        cells.setdefault((grade.student_id, grade.date), []).append(grade)
+
+    attendance_rows = (AttendanceRecord.query
+                      .filter(AttendanceRecord.student_id.in_(student_ids),
+                              AttendanceRecord.date >= period.start_date,
+                              AttendanceRecord.date <= period.end_date)
+                      .order_by(AttendanceRecord.date).all())
+    attendance = {}
+    for record in attendance_rows:
+        attendance.setdefault((record.student_id, record.date), []).append(record)
+
+    ctx.update(mode='dates', columns=columns, cells=cells,
+               attendance=attendance, by_subject=False,
+               column_titles=[d.strftime('%d.%m') for d in columns],
+               summary={},
+               totals=journal_totals(_by_student(cells)),
+               column_totals={},
+               absent_dates=_absent_dates(attendance, columns))
+    return ctx, None
+
+
+def journal_subject_mode(group_id, subject_id, period_id, mode):
+    """Режим 2: столбцы — предметы, в ячейке все оценки за период."""
+    ctx, failure = journal_context(group_id, subject_id, period_id,
+                                   'subjects')
+    if failure:
+        return None, failure
+
+    group = ctx['group']
+    period = ctx['period']
+    students = ctx['students']
+
+    # Столбцы — предметы, которые реально стоят в расписании группы.
+    # Если расписания нет (сетку смотрят до его заполнения), показываем все
+    # доступные предметы, иначе журнал был бы пустым и непонятным.
+    subject_ids = [row[0] for row in
+                   (db.session.query(ScheduleItem.subject_id)
+                    .filter_by(group_id=group.id).distinct().all())]
+    available = {s.id: s for s in ctx['subjects']}
+    column_ids = [sid for sid in subject_ids if sid in available]
+    if not column_ids:
+        column_ids = [s.id for s in ctx['subjects']]
+    column_subjects = [available[sid] for sid in column_ids]
+
+    rows = (Grade.query
+            .filter(Grade.student_id.in_([s.id for s in students]),
+                    Grade.subject_id.in_(column_ids),
+                    Grade.period_id == period.id)
+            .order_by(Grade.subject_id, Grade.date, Grade.id).all()) \
+        if students else []
+    cells = {}
+    for grade in rows:
+        cells.setdefault((grade.student_id, grade.subject_id),
+                         []).append(grade)
+
+    summary = {}
+    column_totals = {}
+    for sid in column_ids:
+        column_grades = [g for (student_id, subject_id), group_ in cells.items()
+                         if subject_id == sid for g in group_]
+        summary[sid] = average_grade(column_grades)
+        column_totals[sid] = grade_distribution(column_grades)
+
+    ctx.update(mode='subjects', columns=column_ids, cells=cells,
+               attendance={}, by_subject=True,
+               column_titles=[s.name for s in column_subjects],
+               summary=summary,
+               totals=journal_totals(_by_student(cells)),
+               column_totals=column_totals,
+               absent_dates={})
+    return ctx, None
+
+
+@main.route('/journal')
+@staff_required
+def journal():
+    """Сетка журнала: два режима — по датам занятий и сводная по предметам."""
+    groups_list = Group.query.order_by(Group.name).all()
+    if not groups_list:
+        return render_template(
+            'error.html', code=404,
+            message='Сначала создайте хотя бы одну группу.'), 404
+
+    mode = request.args.get('mode', 'dates')
+    if mode not in ('dates', 'subjects'):
+        mode = 'dates'
+    group_id = request.args.get('group_id', type=int)
+    subject_id = request.args.get('subject_id', type=int)
+    period_id = request.args.get('period_id', type=int)
+
+    builder = (journal_subject_mode if mode == 'subjects' else journal_context)
+    ctx, failure = builder(group_id, subject_id, period_id, mode)
+    if failure:
+        return failure
+
+    grade_form = JournalGradeForm()
+    # Список занятий для выпадающего списка в сводном режиме. Заполняем
+    # только для выбранного предмета: полный список по всем предметам
+    # заставил бы преподавателя искать дату глазами среди сотни строк.
+    grade_form.subject_id.choices = [(s.id, s.name) for s in ctx['subjects']]
+    grade_form.lesson_date.choices = [
+        (row.id, row.date.strftime('%d.%m.%Y (%a)'))
+        for row in (LessonDate.query
+                    .join(LessonDate.schedule_item)
+                    .filter(ScheduleItem.group_id == ctx['group'].id,
+                            ScheduleItem.subject_id == ctx['subject'].id,
+                            LessonDate.date >= ctx['period'].start_date,
+                            LessonDate.date <= ctx['period'].end_date,
+                            LessonDate.date <= date.today())
+                    .order_by(LessonDate.date).all())]
+
+    return render_template('journal.html', grade_form=grade_form,
+                           edit_form=JournalEditForm(), **ctx)
+
+
+@main.route('/journal/grade/add', methods=['POST'])
+@staff_required
+def journal_add_grade():
+    """Выставление одной или нескольких оценок в ячейке журнала."""
+    form = JournalGradeForm()
+    # Список предметов заполняем до валидации: SelectField без choices падает
+    # с TypeError, а попутно список не должен показывать преподавателю чужие
+    # предметы.
+    form.subject_id.choices = [(s.id, s.name)
+                               for s in visible_subjects_query().all()]
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            flash_msg('error', f'{field}: {"; ".join(errors)}')
+        return _journal_back(request.form)
+
+    subject, failure = teacher_owns_subject(form.subject_id.data)
+    if failure:
+        return failure
+
+    student = db.session.get(Student, form.student_id.data)
+    group_id = request.form.get('group_id', type=int)
+    if student is None:
+        flash_msg('error', 'Студент не найден')
+        return _journal_back(request.form)
+    if group_id and student.group_id != group_id:
+        flash_msg('error', f'{student.full_name} не учится в выбранной группе')
+        log.warning('Отклонена оценка: %s не в группе %s — %s',
+                    student.full_name, group_id, current_user.username)
+        return _journal_back(request.form)
+
+    if form.period_id.data:
+        period = db.session.get(AcademicPeriod, form.period_id.data)
+        if period is None:
+            flash_msg('error', 'Учебный период не найден')
+            return _journal_back(request.form)
+    else:
+        period, failure = current_period_or_default()
+        if failure:
+            return failure
+
+    group = db.session.get(Group, student.group_id)
+    lesson_date, failure = _resolve_lesson_date(form, group, subject, period)
+    if failure:
+        return failure
+
+    values = form.grades()
+    for value in values:
+        grade = Grade(student_id=student.id, subject_id=subject.id,
+                      grade_value=value, grade_type=form.grade_type.data,
+                      date=lesson_date, comments=form.comments.data or None,
+                      period_id=period.id if period else None)
+        db.session.add(grade)
+        db.session.flush()
+        db.session.add(GradeHistory(
+            grade_id=grade.id, old_value=None, new_value=value,
+            action=GradeHistory.ACTION_CREATED, changed_by=current_user.id,
+            comment=form.comments.data or None))
+    db.session.commit()
+
+    log.info('Оценки выставлены: %s, предмет «%s», %s за %s — %s',
+             student.full_name, subject.name, ', '.join(values),
+             lesson_date.strftime('%d.%m.%Y'), current_user.username)
+    word = 'оценка' if len(values) == 1 else 'оценки'
+    flash_msg('success',
+              f'{student.full_name}: {", ".join(values)} — {word} выставлена')
+    return _journal_back(request.form)
+
+
+@main.route('/journal/grade/<int:grade_id>/edit', methods=['POST'])
+@staff_required
+def journal_edit_grade(grade_id):
+    """Правка оценки. Старое и новое значения остаются в GradeHistory."""
+    form = JournalEditForm()
+    grade = db.session.get(Grade, grade_id)
+    if grade is None:
+        flash_msg('error', 'Оценка не найдена')
+        return _journal_back(request.form)
+
+    subject, failure = teacher_owns_subject(grade.subject_id)
+    if failure:
+        return failure
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            flash_msg('error', f'{field}: {"; ".join(errors)}')
+        return _journal_back(request.form)
+
+    old_value = grade.grade_value
+    new_value = form.value.data
+    if old_value == new_value and (grade.comments or None) == \
+            (form.comments.data or None):
+        flash_msg('warning', 'Ничего не изменилось')
+        return _journal_back(request.form)
+
+    grade.grade_value = new_value
+    grade.comments = form.comments.data or None
+    db.session.add(GradeHistory(
+        grade_id=grade.id, old_value=old_value, new_value=new_value,
+        action=GradeHistory.ACTION_UPDATED, changed_by=current_user.id,
+        comment=form.comments.data or None))
+    db.session.commit()
+
+    student = db.session.get(Student, grade.student_id)
+    log.info('Оценка исправлена: %s, предмет «%s», %s → %s — %s',
+             student.full_name if student else grade.student_id, subject.name,
+             old_value, new_value, current_user.username)
+    flash_msg('success', f'Оценка исправлена: {old_value} → {new_value}')
+    return _journal_back(request.form)
+
+
+@main.route('/journal/grade/<int:grade_id>/delete', methods=['POST'])
+@staff_required
+def journal_delete_grade(grade_id):
+    """Удаление оценки с записью в историю (8.5)."""
+    grade = db.session.get(Grade, grade_id)
+    if grade is None:
+        flash_msg('error', 'Оценка не найдена')
+        return _journal_back(request.form)
+
+    subject, failure = teacher_owns_subject(grade.subject_id)
+    if failure:
+        return failure
+
+    student = db.session.get(Student, grade.student_id)
+    value = grade.grade_value
+    lesson_date = grade.date
+    # Саму оценку удаляем, историю оставляем: иначе правка «было 3 → стало 5»
+    # исчезла бы вместе с оценкой и журнал изменений врал бы
+    db.session.add(GradeHistory(
+        grade_id=grade.id, old_value=value, new_value=None,
+        action=GradeHistory.ACTION_DELETED, changed_by=current_user.id,
+        comment=request.form.get('comment')))
+    db.session.delete(grade)
+    db.session.commit()
+
+    log.warning('Оценка удалена из журнала: %s, предмет «%s», значение %s — %s',
+                student.full_name if student else grade.student_id,
+                subject.name, value, current_user.username)
+    flash_msg('success', f'Оценка {value} удалена')
+    return _journal_back(request.form)
+
+
+def _resolve_lesson_date(form, group, subject, period):
+    """Дата занятия из формы либо подтверждённая LessonDate.
+
+    В режиме «по датам» дата приходит скрытым полем из ячейки, в режиме
+    «сводная» — id конкретного занятия. В обоих случаях проверяем, что
+    занятие действительно есть у этой группы и предмета внутри периода:
+    иначе через подделанную форму можно было бы выставить оценку за
+    несуществующее занятие или за пределами периода.
+
+    Возвращает (date|None, error_response|None).
+    """
+    if group is None or subject is None:
+        return None, (render_template(
+            'error.html', code=404, message='Группа или предмет не найден.'), 404)
+
+    if form.lesson_date.data:
+        lesson = db.session.get(LessonDate, form.lesson_date.data)
+        if lesson is None:
+            return None, (render_template(
+                'error.html', code=404,
+                message='Занятие не найдено. Обновите журнал.'), 404)
+        if lesson.schedule_item.group_id != group.id or \
+                lesson.schedule_item.subject_id != subject.id:
+            log.warning('Отклонена оценка: занятие %s не относится к группе %s / предмету %s — %s',
+                        lesson.id, group.id, subject.id, current_user.username)
+            return None, (render_template(
+                'error.html', code=403,
+                message='Это занятие относится к другой группе или предмету.'), 403)
+        if period and not (period.start_date <= lesson.date <= period.end_date):
+            return None, (render_template(
+                'error.html', code=400,
+                message=f'Занятие {lesson.date.strftime("%d.%m.%Y")} вне периода '
+                        f'«{period.name}».'), 400)
+        if lesson.date > date.today():
+            return None, (render_template(
+                'error.html', code=400,
+                message='Нельзя выставить оценку за будущее занятие.'), 400)
+        return lesson.date, None
+
+    lesson_date = _parse_form_date(form.date.data)
+    if lesson_date is None:
+        return None, (render_template(
+            'error.html', code=400, message='Дата занятия указана неверно.'), 400)
+    if period and not (period.start_date <= lesson_date <= period.end_date):
+        return None, (render_template(
+            'error.html', code=400,
+            message=f'Дата {lesson_date.strftime("%d.%m.%Y")} вне периода '
+                    f'«{period.name}».'), 400)
+    if lesson_date > date.today():
+        return None, (render_template(
+            'error.html', code=400,
+            message='Нельзя выставить оценку за будущее занятие.'), 400)
+    exists = db.session.query(LessonDate.id).join(
+        LessonDate.schedule_item).filter(
+        ScheduleItem.group_id == group.id,
+        ScheduleItem.subject_id == subject.id,
+        LessonDate.date == lesson_date).first()
+    if exists is None:
+        log.warning('Отклонена оценка: нет отмеченного занятия %s для группы %s по предмету %s — %s',
+                    lesson_date, group.id, subject.id, current_user.username)
+        return None, (render_template(
+            'error.html', code=400,
+            message=f'Занятия {lesson_date.strftime("%d.%m.%Y")} не было. '
+                    f'Отметьте его в расписании.'), 400)
+    return lesson_date, None
+
+
+def _parse_form_date(raw):
+    """Дата из строки формы; None, если разобрать не удалось."""
+    try:
+        return datetime.strptime(str(raw), '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _journal_back(form):
+    """Возврат на сетку с теми же фильтрами, откуда пришли."""
+    args = {}
+    for key in ('group_id', 'subject_id', 'period_id'):
+        value = form.get(key, type=int)
+        if value:
+            args[key] = value
+    if form.get('mode') in ('dates', 'subjects'):
+        args['mode'] = form.get('mode')
+    return redirect(url_for('main.journal', **args))
 
 
 # ===================== СОТРУДНИКИ =====================

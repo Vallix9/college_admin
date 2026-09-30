@@ -99,6 +99,7 @@ def nav_items_for(user):
         {'endpoint': 'main.students', 'icon': 'bi-people', 'label': 'Студенты'},
         {'endpoint': 'main.groups', 'icon': 'bi-collection', 'label': 'Группы'},
         {'endpoint': 'main.subjects', 'icon': 'bi-book', 'label': 'Предметы'},
+        {'endpoint': 'main.journal', 'icon': 'bi-table', 'label': 'Журнал'},
         {'endpoint': 'main.grades', 'icon': 'bi-journal-check', 'label': 'Оценки'},
         {'endpoint': 'main.periods', 'icon': 'bi-calendar-range',
          'label': 'Периоды'},

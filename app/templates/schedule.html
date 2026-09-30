@@ -157,7 +157,7 @@
                         <input class="form-check-input" type="checkbox"
                                name="{{ lesson_form.item_ids.name }}" value="{{ choice.data }}"
                                id="lesson-{{ choice.data }}"
-                               {% if choice.data in lesson_form.item_ids.data %}checked{% endif %}>
+                               {% if choice.data in (lesson_form.item_ids.data or []) %}checked{% endif %}>
                         <label class="form-check-label small" for="lesson-{{ choice.data }}">
                             {{ choice.label }}
                         </label>

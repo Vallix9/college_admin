@@ -1,0 +1,383 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Журнал{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/journal.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Журнал</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-journal-richtext"></i>Журнал
+{% endblock %}
+
+{% block page_subtitle %}
+{{ group.name }} · {{ subject.name }} · {{ period.name }}
+({{ period.start_date.strftime('%d.%m.%Y') }} — {{ period.end_date.strftime('%d.%m.%Y') }})
+{% endblock %}
+
+{% block header_actions %}
+{% if current_user.is_admin %}
+<a href="{{ url_for('main.schedule', group_id=group.id) }}"
+   class="btn btn-outline-primary">
+    <i class="bi bi-calendar-week"></i> Расписание
+</a>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not students %}
+<div class="card">
+    <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-person-x display-4 d-block mb-3"></i>
+        <p class="mb-0">В группе {{ group.name }} нет активных студентов.</p>
+    </div>
+</div>
+{% else %}
+
+<form method="GET" action="{{ url_for('main.journal') }}" class="card mb-3">
+    <div class="card-body py-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label mb-1" for="group_id">Группа</label>
+                <select name="group_id" id="group_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for g in groups %}
+                    <option value="{{ g.id }}" {% if g.id == group.id %}selected{% endif %}>
+                        {{ g.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1" for="subject_id">Предмет</label>
+                <select name="subject_id" id="subject_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for s in subjects %}
+                    <option value="{{ s.id }}" {% if s.id == subject.id %}selected{% endif %}>
+                        {{ s.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1" for="period_id">Период</label>
+                <select name="period_id" id="period_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for p in periods %}
+                    <option value="{{ p.id }}" {% if p.id == period.id %}selected{% endif %}>
+                        {{ p.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1">Режим</label>
+                <div class="btn-group btn-group-sm w-100" role="group">
+                    <input type="hidden" name="group_id" value="{{ group.id }}">
+                    <input type="hidden" name="subject_id" value="{{ subject.id }}">
+                    <input type="hidden" name="period_id" value="{{ period.id }}">
+                    <a class="btn {% if mode == 'dates' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+                       href="{{ url_for('main.journal', group_id=group.id, subject_id=subject.id, period_id=period.id, mode='dates') }}">
+                        По датам
+                    </a>
+                    <a class="btn {% if mode == 'subjects' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+                       href="{{ url_for('main.journal', group_id=group.id, subject_id=subject.id, period_id=period.id, mode='subjects') }}">
+                        Сводная
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+{% if not columns %}
+<div class="card">
+    <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-calendar-x display-4 d-block mb-3"></i>
+        {% if mode == 'dates' %}
+        <p class="mb-2">За выбранный период нет отмеченных занятий по предмету
+            «{{ subject.name }}».</p>
+        <p class="mb-0">Отметьте занятия состоявшимися в
+            <a href="{{ url_for('main.schedule', group_id=group.id) }}">расписании</a> —
+            без них у журнала нет рабочих дат.</p>
+        {% else %}
+        <p class="mb-0">Нет предметов с оценками за этот период.</p>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="text-muted small">
+            {% if mode == 'dates' %}
+            Столбцы — даты занятий, строки — студенты. Клик по ячейке выставляет оценку.
+            {% else %}
+            Столбцы — предметы, строки — студенты. Все оценки за период «{{ period.name }}».
+            {% endif %}
+        </span>
+        <span class="badge bg-light text-dark">
+            {{ students|length }} студ. · {{ columns|length }}
+            {% if mode == 'dates' %}занятий{% else %}предм.{% endif %}
+        </span>
+    </div>
+    <div class="table-responsive journal-scroll">
+        <table class="table table-bordered table-sm journal-grid mb-0">
+            <thead>
+                <tr>
+                    <th class="journal-sticky student-col">Студент</th>
+                    {% for column in columns %}
+                    <th class="text-center column-head
+                        {% if mode == 'dates' and column in absent_dates %}column-absent{% endif %}">
+                        {% if mode == 'subjects' %}
+                            <div class="fw-semibold">{{ column_titles[loop.index0] }}</div>
+                            <div class="small text-muted">
+                                средний {{ summary.get(column, 0) or '—' }}
+                            </div>
+                        {% else %}
+                            <div class="fw-semibold">{{ column.strftime('%d.%m') }}</div>
+                            <div class="small text-muted">
+                                {{ ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][column.weekday()] }}
+                            </div>
+                        {% endif %}
+                    </th>
+                    {% endfor %}
+                    <th class="text-center total-col">Средний</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for student in students %}
+                {% set row_index = loop.index0 %}
+                <tr>
+                    <td class="journal-sticky student-col">
+                        <a href="{{ url_for('main.view_student', student_id=student.id) }}"
+                           class="text-decoration-none">{{ student.last_name }} {{ student.first_name }}</a>
+                    </td>
+                    {% for column in columns %}
+                    {% set cell_grades = cells.get((student.id, column), []) %}
+                    <td class="journal-cell text-center
+                        {% if cell_grades %}cell-filled{% else %}cell-empty{% endif %}"
+                        data-r="{{ row_index }}"
+                        data-c="{{ loop.index0 }}"
+                        tabindex="0"
+                        data-student="{{ student.id }}"
+                        data-column="{{ column }}"
+                        data-subject="{{ column if mode == 'subjects' else subject.id }}"
+                        data-mode="{{ mode }}">
+                        {% for grade in cell_grades %}
+                        <span class="badge grade-badge {{ grade.get_grade_color() }} me-1"
+                              title="{{ grade.grade_type or '' }}{% if grade.comments %} — {{ grade.comments }}{% endif %}"
+                              data-grade="{{ grade.id }}"
+                              data-value="{{ grade.grade_value }}"
+                              data-comments="{{ grade.comments or '' }}"
+                              data-grade-url="{{ url_for('main.journal_edit_grade', grade_id=grade.id) }}">
+                            {{ grade.grade_value }}
+                        </span>
+                        {% endfor %}
+                        {% set absences = attendance.get((student.id, column), []) %}
+                        {% for record in absences %}
+                        <i class="bi bi-exclamation-circle text-danger"
+                           title="Пропуск: {{ record.reason_label }}{% if record.note %} — {{ record.note }}{% endif %}"></i>
+                        {% endfor %}
+                    </td>
+                    {% endfor %}
+                    {% set student_total = totals.get(student.id) %}
+                    <td class="text-center total-col">
+                        {% if student_total and student_total.count %}
+                        <strong>{{ student_total.average }}</strong>
+                        <div class="small text-muted">{{ student_total.count }} оц.</div>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if not can_edit %}
+    <div class="card-footer bg-warning-subtle text-muted small">
+        <i class="bi bi-eye"></i> Просмотр только: предмет «{{ subject.name }}»
+        ведёт другой преподаватель.
+    </div>
+    {% endif %}
+</div>
+
+<div class="card mt-3">
+    <div class="card-header"><i class="bi bi-pie-chart"></i> Сводка за период</div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <h6 class="text-muted small text-uppercase">По предмету «{{ subject.name }}»</h6>
+                {% set subject_total = namespace(count=0, dist={}) %}
+                {% for student in students %}
+                {% set total = totals.get(student.id) %}
+                {% if total %}
+                {% set subject_total.count = subject_total.count + total.count %}
+                {% endif %}
+                {% endfor %}
+                {% set dist = {} %}
+                {% for student in students %}
+                {% set total = totals.get(student.id) %}
+                {% if total %}
+                {% for value, count in total.distribution.items() %}
+                {% set _unused = dist.update({value: dist.get(value, 0) + count}) %}
+                {% endfor %}
+                {% endif %}
+                {% endfor %}
+                {% if subject_total.count %}
+                <p class="mb-2">Всего оценок: <strong>{{ subject_total.count }}</strong></p>
+                <div class="d-flex flex-wrap gap-2">
+                    {% for value, count in dist.items()|sort %}
+                    <span class="badge bg-light text-dark border">
+                        {{ value }} — {{ count }}
+                    </span>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="mb-0 text-muted small">Оценок за период нет.</p>
+                {% endif %}
+            </div>
+            <div class="col-md-6">
+                {% if mode == 'subjects' %}
+                <h6 class="text-muted small text-uppercase">Средний балл по предметам</h6>
+                <table class="table table-sm mb-0">
+                    <tbody>
+                    {% for column in columns %}
+                    <tr>
+                        <td>{{ column_titles[loop.index0] }}</td>
+                        <td class="text-end">
+                            <strong>{{ summary.get(column, 0) or '—' }}</strong>
+                        </td>
+                        <td class="text-end small text-muted">
+                            {% set dist = column_totals.get(column, {}) %}
+                            {% for value, count in dist.items()|sort %}
+                            <span class="me-1">{{ value }}:{{ count }}</span>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <h6 class="text-muted small text-uppercase">Занятия с пропусками</h6>
+                {% if absent_dates %}
+                <p class="mb-0 small">
+                    Пропуски были
+                    {% for day in absent_dates|sort %}
+                    <span class="badge bg-danger-subtle text-danger">{{ day.strftime('%d.%m') }}</span>
+                    {% endfor %}
+                </p>
+                {% else %}
+                <p class="mb-0 text-muted small">Пропусков в сетке не отмечено.</p>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if can_edit %}
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.journal_add_grade') }}" id="addGradeForm">
+                {{ grade_form.hidden_tag() }}
+                <input type="hidden" name="group_id" value="{{ group.id }}">
+                <input type="hidden" name="mode" value="{{ mode }}">
+                <input type="hidden" name="period_id" value="{{ period.id }}">
+                <input type="hidden" name="date" id="addDate" value="">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-plus-circle"></i> Оценка: <span id="addStudentName"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3" id="addCellHint"></p>
+                    {% if mode == 'subjects' %}
+                    <div class="mb-3">
+                        {{ grade_form.lesson_date.label(class="form-label") }}
+                        {{ grade_form.lesson_date(class="form-select") }}
+                    </div>
+                    {% endif %}
+                    <div class="mb-3">
+                        {{ grade_form.subject_id.label(class="form-label") }}
+                        {{ grade_form.subject_id(class="form-select") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ grade_form.values.label(class="form-label") }}
+                        {{ grade_form.values(class="form-control") }}
+                        <div class="form-text">Несколько оценок через запятую: 5, 4, 4</div>
+                    </div>
+                    <div class="mb-3">
+                        {{ grade_form.grade_type.label(class="form-label") }}
+                        {{ grade_form.grade_type(class="form-select") }}
+                    </div>
+                    <div class="mb-0">
+                        {{ grade_form.comments.label(class="form-label") }}
+                        {{ grade_form.comments(class="form-control", rows=2) }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" id="editGradeForm">
+                {{ edit_form.hidden_tag() }}
+                <input type="hidden" name="group_id" value="{{ group.id }}">
+                <input type="hidden" name="mode" value="{{ mode }}">
+                <input type="hidden" name="subject_id" value="{{ subject.id }}">
+                <input type="hidden" name="period_id" value="{{ period.id }}">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-pencil"></i> Исправить оценку</h5>                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-3">
+                        Было: <span id="editOldValue" class="fw-bold"></span>
+                    </p>
+                    <div class="mb-3">
+                        {{ edit_form.value.label(class="form-label") }}
+                        {{ edit_form.value(class="form-control", autofocus=true) }}
+                    </div>
+                    <div class="mb-0">
+                        {{ edit_form.comments.label(class="form-label") }}
+                        {{ edit_form.comments(class="form-control", rows=2) }}
+                    </div>
+                    <p class="small text-muted mt-2 mb-0">
+                        Старое и новое значения останутся в истории изменений.
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/journal.js') }}"></script>
+{% endblock %}

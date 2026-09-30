@@ -1,9 +1,26 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField, EmailField
+from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField, EmailField, HiddenField
 from wtforms.validators import DataRequired, Length, EqualTo, Optional, Email, ValidationError, NumberRange
 from wtforms.widgets import ListWidget, CheckboxInput
 from app.models import User, Subject, SystemSettings
+from app.utils import parse_grade_values
 from datetime import date
+
+# Типы оценок журнала. Зачёт/незачёт — без подтипа: это сам результат,
+# а не вид работы.
+GRADE_TYPES = ('exam', 'test', 'lab', 'practice', 'homework', 'lecture',
+               'зачет', 'незачет')
+
+GRADE_TYPE_CHOICES = [
+    ('exam', 'Контрольная работа'),
+    ('test', 'Самостоятельная работа'),
+    ('lab', 'Лабораторная работа'),
+    ('practice', 'Практика'),
+    ('homework', 'Домашняя работа'),
+    ('lecture', 'Лекция'),
+    ('зачет', 'Зачёт'),
+    ('незачет', 'Незачёт'),
+]
 
 class MultiCheckboxField(SelectMultipleField):
     widget = ListWidget(prefix_label=False)
@@ -209,6 +226,72 @@ class LessonDateForm(FlaskForm):
         # Дата занятия не может лежать в будущем: отметка фиксирует факт
         if field.data and field.data > date.today():
             raise ValidationError('Нельзя отметить занятие в будущем')
+
+
+class JournalGradeForm(FlaskForm):
+    """Выставление оценок в ячейке журнала.
+
+    values принимает сразу несколько оценок за одно занятие — «5, 4, 4»:
+    за один день у студента может быть и контрольная, и две лабораторные.
+    Каждая оценка сохраняется отдельной строкой Grade, иначе в истории
+    правок нельзя было бы отличить одну от другой.
+    """
+    student_id = HiddenField()
+    subject_id = SelectField('Предмет*', coerce=int, validators=[DataRequired()])
+    period_id = HiddenField()
+    # Режим «по датам»: дата приходит из самой ячейки, скрытым полем.
+    date = HiddenField()
+    # Режим «сводная»: ячейка охватывает период, поэтому занятие выбирается
+    # из списка реальных LessonDate. validate_choice=False намеренно: список
+    # занятий зависит от выбранной группы и предмета, о которых форма ещё не
+    # знает, — принадлежность занятия проверяет маршрут, а не WTForms.
+    lesson_date = SelectField('Занятие', coerce=int, validators=[Optional()],
+                              validate_choice=False)
+    values = StringField(
+        'Оценки*',
+        validators=[DataRequired(message='Введите хотя бы одну оценку'),
+                    Length(max=60)],
+        render_kw={'placeholder': '5, 4, 4', 'autofocus': True})
+    grade_type = SelectField('Тип', choices=GRADE_TYPE_CHOICES,
+                             default='exam')
+    comments = TextAreaField('Комментарий', validators=[Optional(), Length(max=500)])
+
+    def validate_values(self, field):
+        # parse_grade_values поднимает ValueError с перечнем нераспознанного —
+        # превращаем его в ошибку поля, чтобы показать у ячейки, а не
+        # ронять страницу. Молча выбрасывать «6» нельзя: преподаватель должен
+        # увидеть, что ввёл лишнее.
+        try:
+            values = parse_grade_values(field.data)
+        except ValueError as error:
+            raise ValidationError(str(error))
+        if not values:
+            raise ValidationError(
+                'Нужны числа от 2 до 5, «зачет» или «незачет», '
+                'через запятую или пробел')
+        return values
+
+    def grades(self):
+        """Список значений для сохранения: ['5', '4', '4'].
+
+        Безопасно звать только после успешной validate_on_submit().
+        """
+        return parse_grade_values(self.values.data or '')
+
+
+class JournalEditForm(FlaskForm):
+    """Правка выставленной оценки (8.4: не удалять, а исправлять)."""
+    value = StringField('Оценка*', validators=[DataRequired(), Length(max=20)])
+    comments = TextAreaField('Комментарий', validators=[Optional(), Length(max=500)])
+
+    def validate_value(self, field):
+        try:
+            values = parse_grade_values(field.data)
+        except ValueError as error:
+            raise ValidationError(str(error))
+        if len(values) != 1:
+            raise ValidationError('Нужна ровно одна оценка')
+        field.data = values[0]
 
 
 class StaffForm(FlaskForm):

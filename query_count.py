@@ -25,7 +25,8 @@ with app.app_context():
     engine = app.extensions['sqlalchemy'].engine
 
 PAGES = ['/', '/students', '/groups', '/subjects', '/grades', '/reports', '/settings',
-         '/periods', '/schedule']
+         '/periods', '/schedule', '/journal',
+         '/journal?mode=subjects']
 
 with app.test_client() as client:
     html = client.get('/login').get_data(as_text=True)
