@@ -83,6 +83,7 @@ PAGES = [
     (f'/attendance?group_id={group_id}', 'пропуски группы из параметра'),
     ('/results', 'итоги и свод'),
     (f'/results?group_id={group_id}', 'итоги группы из параметра'),
+    ('/accounts', 'учётные записи студентов'),
     ('/reports', 'отчёты'),
     ('/reports/students', 'отчёт по студентам в Excel'),
     (f'/reports/group/{group_id}', 'отчёт по группе в Excel'),

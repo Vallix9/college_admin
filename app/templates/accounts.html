@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}Учётные записи студентов{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ home_url() }}">Главная</a></li>
+<li class="breadcrumb-item active">Учётные записи</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-person-badge me-2"></i>Учётные записи студентов
+{% endblock %}
+
+{% block page_subtitle %}
+Логином служит номер зачётки. В базе хранится только хеш пароля — показать
+прежний пароль невозможно, его можно только выдать заново.
+{% endblock %}
+
+{% block content %}
+<div class="card mb-4 no-print">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-people me-2"></i>Выдать учётные записи</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('main.issue_accounts') }}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label" for="issue_group">Группа</label>
+                <select name="group_id" id="issue_group" class="form-select">
+                    <option value="">Все группы</option>
+                    {% for group in groups %}
+                    <option value="{{ group.id }}"
+                            {% if group.id == group_id %}selected{% endif %}>{{ group.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-5">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="all_students" id="all_students" value="1">
+                    <label class="form-check-label" for="all_students">
+                        Включить отчисленных и ушедших в академический отпуск
+                    </label>
+                </div>
+                <div class="form-text">
+                    По умолчанию — только те, кто учится. Уже выданные записи не
+                    трогаются: сброс чужого пароля делается отдельно.
+                </div>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-success w-100">
+                    <i class="bi bi-person-check"></i> Выдать
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if without_account %}
+<div class="card mb-4">
+    <div class="card-header bg-warning-subtle">
+        <h5 class="mb-0">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            Без учётной записи: {{ without_account|length }}
+        </h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-2">
+            Эти студенты не смогут войти в систему, пока запись не выдана.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>№</th>
+                        <th>Зачётка</th>
+                        <th>ФИО</th>
+                        <th>Группа</th>
+                        <th>Статус</th>
+                        <th class="text-end no-print">Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for student in without_account %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td><code>{{ student.student_id }}</code></td>
+                        <td>{{ student.full_name }}</td>
+                        <td>{{ student.group.name if student.group else '—' }}</td>
+                        <td><span class="badge bg-secondary">{{ student.status }}</span></td>
+                        <td class="text-end no-print">
+                            <a href="{{ url_for('main.edit_student', id=student.id) }}"
+                               class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-person-plus"></i> Выдать
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">
+            <i class="bi bi-person-vcard me-2"></i>Активные записи ({{ accounts|length }})
+        </h5>
+    </div>
+    <div class="card-body no-print">
+        <form method="GET" action="{{ url_for('main.accounts') }}" class="row g-2 align-items-end mb-3">
+            <div class="col-md-3">
+                <label class="form-label" for="filter_group">Группа</label>
+                <select name="group_id" id="filter_group" class="form-select">
+                    <option value="">Все группы</option>
+                    {% for group in groups %}
+                    <option value="{{ group.id }}"
+                            {% if group.id == group_id %}selected{% endif %}>{{ group.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="filter_q">Поиск</label>
+                <input type="text" name="q" id="filter_q" class="form-control"
+                       value="{{ search }}" placeholder="Зачётка или ФИО">
+            </div>
+            <div class="col-md-5 d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-funnel"></i> Применить
+                </button>
+                {% if group_id or search %}
+                <a href="{{ url_for('main.accounts') }}" class="btn btn-outline-secondary">Сбросить</a>
+                {% endif %}
+            </div>
+        </form>
+
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Логин (зачётка)</th>
+                        <th>ФИО</th>
+                        <th>Группа</th>
+                        <th>Создана</th>
+                        <th>Последний вход</th>
+                        <th>Состояние пароля</th>
+                        <th>Состояние</th>
+                        <th class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in accounts %}
+                    <tr class="{% if not user.is_active %}table-muted{% endif %}">
+                        <td><code>{{ user.username }}</code></td>
+                        <td>
+                            {{ user.full_name or '—' }}
+                            {% if user.student_account and user.student_account.group %}
+                                <br><small class="text-muted">
+                                    {{ user.student_account.group.name }}
+                                </small>
+                            {% endif %}
+                        </td>
+                        <td>{{ user.student_account.group.name if user.student_account and user.student_account.group else '—' }}</td>
+                        <td class="small text-muted">
+                            {{ user.created_at.strftime('%d.%m.%Y') if user.created_at else '—' }}
+                        </td>
+                        <td class="small text-muted">
+                            {{ user.last_login_at.strftime('%d.%m.%Y %H:%M') if user.last_login_at else 'ещё не входил' }}
+                        </td>
+                        <td>
+                            {% if user.password_temporary %}
+                                <span class="badge bg-warning text-dark">временный, не менялся</span>
+                            {% else %}
+                                <span class="badge bg-success">своими руками</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if user.is_active %}
+                                <span class="badge bg-success">активна</span>
+                            {% else %}
+                                <span class="badge bg-secondary">заблокирована</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <div class="btn-group btn-group-sm" role="group">
+                                <button type="button" class="btn btn-outline-warning" title="Сбросить пароль"
+                                        data-bs-toggle="collapse" data-bs-target="#reset{{ user.id }}">
+                                    <i class="bi bi-key"></i>
+                                </button>
+                                <form method="POST" action="{{ url_for('main.toggle_student_account', id=user.id) }}"
+                                      style="display: inline;">
+                                    <button type="submit" class="btn btn-outline-secondary"
+                                            title="{% if user.is_active %}Заблокировать{% else %}Разблокировать{% endif %}">
+                                        <i class="bi bi-{% if user.is_active %}lock{% else %}unlock{% endif %}"></i>
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('main.delete_student_account', id=user.id) }}"
+                                      style="display: inline;">
+                                    <button type="submit" class="btn btn-outline-danger" title="Удалить запись"
+                                            onclick="return confirm('Удалить учётную запись {{ user.username }}? Студент и его оценки останутся в базе, запись можно будет выдать заново.');">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr class="collapse" id="reset{{ user.id }}">
+                        <td colspan="8" class="bg-light">
+                            <form method="POST" action="{{ url_for('main.reset_student_account', id=user.id) }}">
+                                <div class="row g-2 align-items-end">
+                                    <div class="col-md-4">
+                                        <label class="form-label small mb-1">
+                                            Новый временный пароль для <code>{{ user.username }}</code>
+                                        </label>
+                                        <p class="form-text mb-0">
+                                            Пароль сгенерируется автоматически и будет
+                                            показан один раз. Передайте его студенту.
+                                        </p>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <button type="submit" class="btn btn-warning">
+                                            <i class="bi bi-key"></i> Сбросить и показать
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center text-muted py-4">
+                            <i class="bi bi-person-vcard display-5 d-block mb-2"></i>
+                            Учётных записей студентов пока нет
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

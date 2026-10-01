@@ -34,6 +34,11 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=now)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
     password_changed_at = db.Column(db.DateTime)
+    # Пароль выдан администратором и ещё не заменён самим пользователем.
+    # По нему видно, чьи учётные записи выданы, но не менялись: такие пароли
+    # живут на бумаге у студента, а не в его голове. Флаг ставится при выдаче
+    # и снимается в /my/password.
+    password_temporary = db.Column(db.Boolean, default=False, nullable=False)
     last_login_at = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     full_name = db.Column(db.String(200))
@@ -42,6 +47,11 @@ class User(UserMixin, db.Model):
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
         self.password_changed_at = now()
+
+    def set_temporary_password(self, password):
+        """Выдать временный пароль и запомнить, что он ещё не заменён."""
+        self.set_password(password)
+        self.password_temporary = True
 
     def check_password(self, password):
         if not self.password_hash:

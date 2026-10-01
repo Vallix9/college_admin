@@ -113,6 +113,8 @@ def nav_items_for(user):
     if is_admin:
         items.append({'endpoint': 'main.staff', 'icon': 'bi-person-gear',
                       'label': 'Сотрудники'})
+        items.append({'endpoint': 'main.accounts', 'icon': 'bi-person-badge',
+                      'label': 'Учётные записи'})
 
     return items
 

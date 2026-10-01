@@ -197,6 +197,104 @@
             </div>
         </div>
         
+        {% if student and account_form %}
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-key"></i> Учётная запись</h5>
+            </div>
+            <div class="card-body">
+                {% if student.user %}
+                    <p class="mb-3">
+                        <span class="badge bg-success">
+                            <i class="bi bi-check-circle"></i> Запись создана
+                        </span>
+                        {% if not student.user.is_active %}
+                        <span class="badge bg-secondary">заблокирована</span>
+                        {% endif %}
+                        {% if student.user.password_temporary %}
+                        <span class="badge bg-warning text-dark">пароль ещё не изменён</span>
+                        {% endif %}
+                    </p>
+                    <p class="text-muted small">
+                        Последний вход:
+                        {% if student.user.last_login_at %}
+                            {{ student.user.last_login_at.strftime('%d.%m.%Y %H:%M') }}
+                        {% else %}
+                            ещё не входил
+                        {% endif %}
+                    </p>
+                {% else %}
+                    <p class="text-muted">
+                        Учётной записи пока нет. Логином станет номер зачётки
+                        (<code>{{ student.student_id }}</code>) — вводить его не нужно.
+                    </p>
+                {% endif %}
+
+                <hr>
+
+                <form method="POST" action="{{ url_for('main.set_student_account', id=student.id) }}"
+                      autocomplete="off">
+                    {{ account_form.hidden_tag() }}
+
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="account-login">Логин</label>
+                            <input type="text" class="form-control" id="account-login"
+                                   value="{{ student.student_id }}" readonly disabled>
+                            <div class="form-text">
+                                Логин равен номеру зачётки и не редактируется.
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            {{ account_form.password.label(class="form-label") }}
+                            <div class="input-group">
+                                {{ account_form.password(id="account-password", class="form-control", placeholder="Например: Kf7mPq2xRz") }}
+                                <button type="button" class="btn btn-outline-secondary" id="generate-password">
+                                    <i class="bi bi-shuffle"></i> Сгенерировать
+                                </button>
+                            </div>
+                            {% if account_form.password.errors %}
+                                <div class="text-danger small mt-1">
+                                    {% for error in account_form.password.errors %}{{ error }}{% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            {{ account_form.confirm_password.label(class="form-label") }}
+                            {{ account_form.confirm_password(id="account-password-confirm", class="form-control") }}
+                            {% if account_form.confirm_password.errors %}
+                                <div class="text-danger small mt-1">
+                                    {% for error in account_form.confirm_password.errors %}{{ error }}{% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2 mt-3">
+                        {{ account_form.submit(id="account-submit", class="btn btn-outline-primary") }}
+                        <a href="{{ url_for('main.accounts') }}" class="btn btn-link">
+                            Все учётные записи
+                        </a>
+                    </div>
+
+                    <p class="text-muted small mt-2 mb-0">
+                        {% if student.user %}
+                            Пароль показывается один раз, сразу после сохранения.
+                            Запишите или распечатайте его — потом он недоступен
+                            даже администратору, только сброс.
+                        {% else %}
+                            После сохранения пароль появится на экране один раз.
+                            Запишите или распечатайте его — потом он недоступен
+                            даже администратору, только сброс.
+                        {% endif %}
+                    </p>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
         {% if student %}
         <div class="card mt-4">
             <div class="card-header bg-danger text-white">
@@ -214,4 +312,8 @@
         {% endif %}
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/account.js') }}"></script>
 {% endblock %}

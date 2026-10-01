@@ -278,6 +278,21 @@ def export_to_excel(data, filename_prefix, fmt=None):
 
     return filepath
 
+def credentials_sheets(issued):
+    """Листы ведомости с выданными логинами и паролями.
+
+    Таблица идёт на раздачу: её печатают и режут, поэтому нумерация сквозная,
+    а пароль стоит в отдельной колонке с зазором — иначе при переносе строки
+    на следующую страницу логин отрывается от своего пароля.
+    """
+    header = ['№', 'Зачётка (логин)', 'ФИО', 'Группа', 'Временный пароль']
+    rows = [header]
+    for index, row in enumerate(issued, start=1):
+        rows.append([index, row.get('login', ''), row.get('name', ''),
+                     row.get('group', ''), row.get('password', '')])
+    return [('Учётные записи', rows)]
+
+
 def format_date(date_obj):
     """Форматирование даты"""
     if date_obj:
@@ -1233,6 +1248,69 @@ def generate_password(length=12):
     import string
     characters = string.ascii_letters + string.digits + "!@#$%^&*"
     return ''.join(random.choice(characters) for _ in range(length))
+
+
+# Буквы и цифры, которые не путаются при чтении с распечатанной ведомости.
+# «O» и «0», «l» и «1» выглядят одинаково, и студент с распечатки вводит не тот
+# пароль — а потом идёт к администратору с ложным «пароль не подходит».
+READABLE_PASSWORD_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+
+
+def generate_temporary_password(length=10):
+    """Пароль для выдачи на бумаге.
+
+    Только читаемые символы, без 0/O и 1/l/I. Из generate_password не годится:
+    там русский студент раз за разом путает O с нулём.
+    """
+    import random
+    return ''.join(random.choice(READABLE_PASSWORD_CHARS) for _ in range(length))
+
+
+def normalize_username(username):
+    """Логин в виде, по которому его сравнивают.
+
+    Регистр не различает: вход «ADMIN» и «admin» — одна и та же учётная
+    запись, иначе в списке появятся два неотличимых пользователя.
+    """
+    return (username or '').strip()
+
+
+def find_user_by_login(login):
+    """Найти учётную запись по логину без учёта регистра.
+
+    Сначала точное совпадение, затем перебор на Python. Так не приходится
+    полагаться на lower() в SQLite: он умеет только латиницу, а Python
+    lower() ещё и кириллицу, поэтому запрос lower(логин) = 'дб-01' не нашёл бы
+    запись «ДБ-01» — и человек с верным паролем получал бы «неверный логин».
+    Перебор дешёв: записей единицы, и он случается только когда точного
+    совпадения нет.
+    """
+    from app.models import User
+    name = normalize_username(login)
+    if not name:
+        return None
+    user = User.query.filter(User.username == name).first()
+    if user is not None:
+        return user
+    folded = name.casefold()
+    for candidate in User.query.all():
+        if normalize_username(candidate.username).casefold() == folded:
+            return candidate
+    return None
+
+
+def username_taken(username, exclude_id=None):
+    """Занят ли логин кем-то ещё, без учёта регистра.
+
+    Проверка идёт по всей таблице User, а не только среди студентов: номер
+    зачётки «admin» столкнётся с логином сотрудника, и такой студент
+    останется без входа, хотя его карточка сохранилась. exclude_id нужен
+    при правке существующей записи — иначе запись занимает свой же логин.
+    """
+    user = find_user_by_login(username)
+    if user is None:
+        return False
+    return exclude_id is None or user.id != exclude_id
 
 def get_system_stats():
     import psutil

@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file
+﻿from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
 from urllib.parse import urlparse
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +13,7 @@ from app.models import (User, Student, Group, Subject, Grade, SystemSettings,
                         AttendanceRecord, GradeHistory, PeriodResult)
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountPasswordForm
+from app.forms import StudentAccountForm
 from app.forms import PeriodForm, PeriodGenerateForm, ScheduleItemForm, DeleteTokenForm
 from app.forms import ScheduleDayForm, LessonDateForm
 from app.forms import JournalGradeForm, JournalEditForm, PeriodResultForm
@@ -29,6 +30,9 @@ from app.utils import grade_distribution, journal_totals
 from app.utils import recommend_final_grade, grade_quality_stats
 from app.utils import read_log_lines, get_log_file_path, clear_log_file
 from app.utils import generate_password
+from app.utils import (generate_temporary_password, username_taken,
+                       normalize_username, credentials_sheets,
+                       find_user_by_login)
 
 log = get_logger()
 
@@ -302,7 +306,11 @@ def login():
         return redirect(home_url())
     form = LoginForm()
     if form.validate_on_submit():
-        user = User.query.filter_by(username=form.username.data).first()
+        # Логин ищется без учёта регистра: тот, кто набирает «ADMIN» вместо
+        # «admin», тот же человек, а не другой сотрудник. Строгое сравнение
+        # давало бы «неверный логин» на верном пароле — и администратор
+        # объяснял бы это студенту, который путает заглавные буквы.
+        user = find_user_by_login(form.username.data)
         
         if user and not user.is_active:
             # Отказ именно до проверки пароля: неактивному пользователю
@@ -391,7 +399,8 @@ def add_student():
             log.exception('Ошибка добавления студента: %s', e)
             flash_msg('error', f'Ошибка добавления студента: {str(e)}')
     
-    return render_template('student_form.html', form=form, title='Добавить студента', student=None)
+    return render_template('student_form.html', form=form, account_form=None,
+                           title='Добавить студента', student=None)
 
 @main.route('/students/<int:id>/edit', methods=['GET', 'POST'])
 @admin_required
@@ -401,8 +410,31 @@ def edit_student(id):
     form.group_id.choices = [(0, 'Без группы')] + [(g.id, g.name) for g in Group.query.all()]
     if form.validate_on_submit():
         try:
+            # Логин ученической записи равен номеру зачётки, поэтому при его
+            # правке старую запись надо переименовать. Пропуск приводил бы к
+            # тому, что в ведомости один номер, а войти можно только по старому.
+            account = student.user
+            old_login = account.username if account else None
+            new_login = normalize_username(form.student_id.data)
+            if account and old_login != new_login:
+                if username_taken(new_login, exclude_id=account.id):
+                    form.student_id.errors.append(
+                        f'Логин {new_login} уже занят другой учётной записью')
+                    return render_template(
+                        'student_form.html', form=form,
+                        account_form=StudentAccountForm(), title='Редактировать студента',
+                        student=student)
+                log.warning('Логин ученической записи изменён: %s -> %s — %s',
+                            old_login, new_login, current_user.username)
+                account.username = new_login
+
             form.populate_obj(student)
             student.group_id = form.group_id.data if form.group_id.data != 0 else None
+            if account:
+                # ФИО и email хранятся и в записи, и в карточке. Расхождение
+                # выглядело бы как «список сотрудников не совпадает с журналом».
+                account.full_name = student.full_name
+                account.email = student.email or None
             db.session.commit()
             log.info('Изменён студент: %s — %s', student.student_id, current_user.username)
             flash_msg('success', f'Данные студента {student.full_name} обновлены')
@@ -414,9 +446,11 @@ def edit_student(id):
         except Exception as e:
             db.session.rollback()
             log.exception('Ошибка изменения студента: %s', e)
-            flash_msg('error', f'Ошибка обновления студента: {str(e)}')
+            flash_msg('error', f'Ошибка изменения студента: {str(e)}')
     
-    return render_template('student_form.html', form=form, title='Редактировать студента', student=student)
+    return render_template('student_form.html', form=form,
+                           account_form=StudentAccountForm(), title='Редактировать студента',
+                           student=student)
 
 @main.route('/students/<int:id>/delete', methods=['POST'])
 @admin_required
@@ -2521,13 +2555,16 @@ def add_staff():
     form = StaffForm()
     if form.validate_on_submit():
         try:
-            user = User(username=form.username.data.strip(),
+            user = User(username=normalize_username(form.username.data),
                         full_name=(form.full_name.data or '').strip() or None,
                         email=form.email.data or None,
                         role=form.role.data,
                         is_active=form.is_active.data,
                         created_by=current_user.id)
-            user.set_password(form.password.data)
+            # Пароль, заданный администратором, — временный: сотрудник обязан
+            # сменить его при первом входе. Иначе через год этот пароль
+            # останется в чужой переписке.
+            user.set_temporary_password(form.password.data)
             db.session.add(user)
             db.session.commit()
             log.info('Создан сотрудник: %s (роль %s) — %s',
@@ -2594,7 +2631,7 @@ def reset_staff_password(id):
         flash_msg('error', 'Новый пароль не прошёл проверку')
         return redirect(url_for('main.staff'))
     try:
-        user.set_password(form.password.data)
+        user.set_temporary_password(form.password.data)
         db.session.commit()
         log.warning('Сброшен пароль сотрудника %s — %s',
                     user.username, current_user.username)
@@ -2639,73 +2676,308 @@ def delete_staff(id):
     return redirect(url_for('main.staff'))
 
 
-@main.route('/staff/student-accounts', methods=['POST'])
+# ===================== УЧЁТНЫЕ ЗАПИСИ СТУДЕНТОВ =====================
+@main.route('/accounts')
 @admin_required
-def create_student_accounts():
-    """Массовая выдача учётных записей студентам.
+def accounts():
+    """Список ученических учётных записей (11.4).
 
-    Логином служит номер зачётки, пароль — временный. Аккаунты создаются
-    только для тех студентов, у кого их ещё нет; существующие не трогаются.
+    Пароля здесь нет и быть не может: в базе лежит только хеш, а
+    восстановить из хеша исходный пароль нельзя. Поэтому у администратора
+    есть только «выдать новый», а не «показать прежний».
     """
-    group_id = request.form.get('group', type=int)
-    status = request.form.get('status', 'active')
+    group_id = request.args.get('group_id', type=int)
+    search = (request.args.get('q') or '').strip()
+
+    query = (User.query
+             .filter(User.role == User.ROLE_STUDENT)
+             .join(Student, Student.user_id == User.id)
+             .options(joinedload(User.student_account)
+                      .joinedload(Student.group)))
+    if group_id:
+        query = query.filter(Student.group_id == group_id)
+    if search:
+        pattern = f'%{search}%'
+        query = query.filter(or_(User.username.ilike(pattern),
+                                 User.full_name.ilike(pattern)))
+
+    rows = query.order_by(User.username).all()
+
+    # Студенты без учётной записи — их видно сразу, иначе «выдал всем» не
+    # означает «все смогут войти»: номер зачётки мог занять сотрудник.
+    no_account_filter = Student.query.filter(Student.user_id.is_(None))
+    if group_id:
+        no_account_filter = no_account_filter.filter(Student.group_id == group_id)
+    without_account = (no_account_filter
+                       .options(joinedload(Student.group))
+                       .order_by(Student.last_name).all())
+
+    return render_template('accounts.html', accounts=rows,
+                           without_account=without_account,
+                           groups=Group.query.order_by(Group.name).all(),
+                           group_id=group_id, search=search)
+
+
+@main.route('/accounts/issue', methods=['POST'])
+@admin_required
+def issue_accounts():
+    """Массовая выдача учётных записей студентам группы (11.3).
+
+    Логином служит номер зачётки, пароль — временный и одноразовый. Уже
+    выданные записи не трогаются: сброс чужого пароля — отдельное
+    осознанное действие, а не побочный эффект кнопки «выдать всем».
+    """
+    group_id = request.form.get('group_id', type=int)
+    include_without = request.form.get('all_students') == '1'
 
     query = Student.query.filter(Student.user_id.is_(None))
     if group_id:
         query = query.filter(Student.group_id == group_id)
-    if status and status != 'all':
-        query = query.filter(Student.status == status)
+    if not include_without:
+        query = query.filter(Student.status == 'active')
 
-    students_list = query.order_by(Student.last_name).all()
+    students_list = (query.options(joinedload(Student.group))
+                     .order_by(Student.last_name).all())
     if not students_list:
         flash_msg('info', 'Нет студентов без учётной записи')
-        return redirect(url_for('main.staff'))
+        return redirect(url_for('main.accounts'))
 
     issued = []
     skipped = []
     for student in students_list:
-        login_name = student.student_id
-        if User.query.filter_by(username=login_name).first():
-            # логин занят не студентом — не трогаем, разбираться должен админ
-            skipped.append(student.full_name)
+        login_name = normalize_username(student.student_id)
+        # Проверка по всей таблице User, без учёта регистра: номер зачётки
+        # «ADMIN» не должен отдавать логин сотрудника-администратора.
+        if username_taken(login_name):
+            skipped.append({'name': student.full_name, 'login': login_name,
+                            'reason': 'логин уже занят другой учётной записью'})
             continue
-        temporary_password = generate_password()
-        try:
-            user = User(username=login_name,
-                        full_name=student.full_name,
-                        role=User.ROLE_STUDENT,
-                        is_active=True,
-                        created_by=current_user.id)
-            user.set_password(temporary_password)
-            db.session.add(user)
-            db.session.flush()
-            student.user_id = user.id
-            issued.append({'login': login_name, 'name': student.full_name,
-                           'password': temporary_password})
-        except Exception as e:
-            log.exception('Не удалось выдать аккаунт %s: %s', login_name, e)
+        if not login_name:
+            skipped.append({'name': student.full_name, 'login': '—',
+                            'reason': 'не заполнен номер зачётки'})
+            continue
+
+        temporary_password = generate_temporary_password()
+        user = User(username=login_name,
+                    full_name=student.full_name,
+                    email=student.email or None,
+                    role=User.ROLE_STUDENT,
+                    is_active=True,
+                    created_by=current_user.id)
+        user.set_temporary_password(temporary_password)
+        db.session.add(user)
+        db.session.flush()
+        student.user_id = user.id
+        issued.append({'login': login_name, 'name': student.full_name,
+                       'group': student.group.name if student.group else '',
+                       'password': temporary_password})
 
     try:
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        log.exception('Ошибка массовой выдачи аккаунтов: %s', e)
+        log.exception('Ошибка массовой выдачи учётных записей: %s', e)
         flash_msg('error', f'Ошибка выдачи учётных записей: {str(e)}')
-        return redirect(url_for('main.staff'))
+        return redirect(url_for('main.accounts'))
 
-    if issued:
-        log.info('Выдано учётных записей студентам: %d — %s',
-                 len(issued), current_user.username)
-    if skipped:
-        log.warning('Логины заняты, записи не выданы: %d', len(skipped))
-        flash_msg('warning', f'Пропущено записей с занятым логином: {len(skipped)}. '
-                            f'Проверьте их вручную.')
+    # В журнал — только факт и число. Сами пароли в журнал событий не пишутся:
+    # журнал читают при разборе инцидентов, и там им не место.
+    log.info('Выдано учётных записей студентам: %d%s — %s',
+             len(issued), f' (группа {group_id})' if group_id else '',
+             current_user.username)
+    for row in skipped:
+        log.warning('Логин «%s» занят, учётная запись не выдана: %s',
+                    row['login'], row['name'])
+
     if not issued:
         flash_msg('info', 'Новые учётные записи не созданы')
-        return redirect(url_for('main.staff'))
+        return redirect(url_for('main.accounts'))
 
-    return render_template(
-        'staff_accounts_issued.html', issued=issued, skipped=skipped)
+    # Ведомость с паролями сохраняем файлом: её печатают и режут. На экране
+    # пароли видны один раз, а распечатку администратор отдаёт руками.
+    download_url = None
+    try:
+        filename = f'uchetnye_zapisi_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        filepath = os.path.join(EXPORT_DIR, filename)
+        save_export(filepath, credentials_sheets(issued))
+        download_url = url_for('main.download_credentials',
+                               filename=filename)
+    except Exception as e:
+        # Не срываем выдачу из-за файла: логины и пароли уже показаны на
+        # экране, администратор может перепечатать таблицу.
+        log.exception('Не удалось сохранить ведомость с паролями: %s', e)
+        flash_msg('warning', 'Ведомость не сохранилась для скачивания, '
+                             'перепечатайте таблицу с экрана')
+
+    return render_template('credentials_issued.html', issued=issued,
+                           skipped=skipped, download_url=download_url)
+
+
+@main.route('/accounts/credentials/<path:filename>')
+@admin_required
+def download_credentials(filename):
+    """Скачать ведомость с выданными паролями.
+
+    Файл лежит в exports/ и отдаётся только администратору: пароли на
+    диске столько же опасны, сколько в журнале событий.
+    """
+    safe = sanitize_filename(os.path.basename(filename))
+    if not safe.endswith('.xlsx') or '/' in filename or '\\' in filename:
+        flash_msg('error', 'Недопустимое имя файла')
+        return redirect(url_for('main.accounts'))
+    return send_from_directory(EXPORT_DIR, safe, as_attachment=True)
+
+
+@main.route('/students/<int:id>/account', methods=['POST'])
+@admin_required
+def set_student_account(id):
+    """Выдать или сбросить пароль одного студента (11.1).
+
+    Логин не вводится: он равен номеру зачётки из карточки. Новый пароль
+    показывается один раз, дальше — только хеш.
+    """
+    student = Student.query.get_or_404(id)
+    form = StudentAccountForm()
+    if not form.validate_on_submit():
+        # Причина прямо в сообщении: «пароль не прошёл проверку» ничего
+        # не говорит о том, что не сошлись два введённых пароля.
+        flash_form_errors(form, {'password': 'Пароль',
+                                 'confirm_password': 'Повтор пароля'})
+        return redirect(url_for('main.edit_student', id=student.id))
+
+    login_name = normalize_username(student.student_id)
+    user = student.user
+    was_new = user is None
+    if user is None:
+        if username_taken(login_name):
+            flash_msg('error', f'Логин {login_name} уже занят другой '
+                               f'учётной записью')
+            return redirect(url_for('main.edit_student', id=student.id))
+        user = User(username=login_name, role=User.ROLE_STUDENT,
+                    is_active=True, created_by=current_user.id)
+        db.session.add(user)
+        db.session.flush()
+        student.user_id = user.id
+
+    user.full_name = student.full_name
+    user.email = student.email or None
+    user.is_active = True
+    user.set_temporary_password(form.password.data)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка выдачи учётной записи: %s', e)
+        flash_msg('error', f'Ошибка выдачи учётной записи: {str(e)}')
+        return redirect(url_for('main.edit_student', id=student.id))
+
+    if was_new:
+        log.info('Выдана учётная запись студенту %s (логин %s) — %s',
+                 student.full_name, login_name, current_user.username)
+    else:
+        log.warning('Сброшен пароль ученической записи %s (логин %s) — %s',
+                    student.full_name, login_name, current_user.username)
+
+    # Один раз показываем пароль и отправляем в кабинет самого студента.
+    return render_template('password_issued.html', rows=[{
+        'login': login_name, 'name': student.full_name,
+        'password': form.password.data,
+    }], back_url=url_for('main.edit_student', id=student.id))
+
+
+@main.route('/accounts/<int:id>/reset', methods=['POST'])
+@admin_required
+def reset_student_account(id):
+    """Сброс пароля ученической записи — новый временный (11.5)."""
+    user = User.query.get_or_404(id)
+    if user.role != User.ROLE_STUDENT:
+        flash_msg('error', 'Это не учётная запись студента')
+        return redirect(url_for('main.accounts'))
+
+    temporary_password = generate_temporary_password()
+    user.set_temporary_password(temporary_password)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка сброса пароля ученической записи: %s', e)
+        flash_msg('error', f'Ошибка сброса пароля: {str(e)}')
+        return redirect(url_for('main.accounts'))
+
+    log.warning('Сброшен пароль ученической записи %s (логин %s) — %s',
+                user.display_name, user.username, current_user.username)
+    return render_template('password_issued.html', rows=[{
+        'login': user.username, 'name': user.display_name,
+        'password': temporary_password,
+    }], back_url=url_for('main.accounts'))
+
+
+@main.route('/accounts/<int:id>/toggle', methods=['POST'])
+@admin_required
+def toggle_student_account(id):
+    """Блокировка и разблокировка ученической записи (11.5).
+
+    Запись не удаляется: у отчисленного студента остаётся история оценок и
+    входов, и удаление аккаунта обнулило бы её.
+    """
+    user = User.query.get_or_404(id)
+    if user.role != User.ROLE_STUDENT:
+        flash_msg('error', 'Это не учётная запись студента')
+        return redirect(url_for('main.accounts'))
+
+    user.is_active = not user.is_active
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка смены статуса учётной записи: %s', e)
+        flash_msg('error', f'Ошибка смены статуса: {str(e)}')
+        return redirect(url_for('main.accounts'))
+
+    if user.is_active:
+        log.info('Разблокирована учётная запись %s (логин %s) — %s',
+                 user.display_name, user.username, current_user.username)
+        flash_msg('success', f'Запись {user.username} разблокирована')
+    else:
+        log.warning('Заблокирована учётная запись %s (логин %s) — %s',
+                    user.display_name, user.username, current_user.username)
+        flash_msg('warning', f'Запись {user.username} заблокирована')
+    return redirect(url_for('main.accounts'))
+
+
+@main.route('/accounts/<int:id>/delete', methods=['POST'])
+@admin_required
+def delete_student_account(id):
+    """Удаление ученической записи с сохранением студента (11.5).
+
+    Студент остаётся в базе вместе с оценками: терять историю из-за
+    забытого пароля нельзя, учётную запись можно создать заново одной кнопкой.
+    """
+    user = User.query.get_or_404(id)
+    if user.role != User.ROLE_STUDENT:
+        flash_msg('error', 'Это не учётная запись студента')
+        return redirect(url_for('main.accounts'))
+
+    login_name = user.username
+    student = user.student_account
+    student_name = student.full_name if student else user.display_name
+    try:
+        if student is not None:
+            student.user_id = None
+        db.session.delete(user)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        log.exception('Ошибка удаления учётной записи: %s', e)
+        flash_msg('error', f'Ошибка удаления: {str(e)}')
+        return redirect(url_for('main.accounts'))
+
+    log.warning('Удалена учётная запись %s (логин %s), студент сохранён — %s',
+                student_name, login_name, current_user.username)
+    flash_msg('success', f'Запись {login_name} удалена, студент '
+                         f'{student_name} сохранён')
+    return redirect(url_for('main.accounts'))
 
 
 # ===================== ЛИЧНЫЙ КАБИНЕТ =====================
@@ -2743,6 +3015,9 @@ def change_password():
             flash_msg('error', 'Текущий пароль указан неверно')
         else:
             current_user.set_password(form.new_password.data)
+            # Свой пароль вместо выданного — значит, человек его запомнил.
+            # Список учётных записей перестаёт считать этот пароль временным.
+            current_user.password_temporary = False
             db.session.commit()
             log.info('Пользователь %s сменил пароль', current_user.username)
             flash_msg('success', 'Пароль успешно изменён')

@@ -4,7 +4,7 @@ from wtforms.validators import (DataRequired, InputRequired, Length, EqualTo,
                                 Optional, Email, ValidationError, NumberRange)
 from wtforms.widgets import ListWidget, CheckboxInput
 from app.models import User, Subject, SystemSettings
-from app.utils import parse_grade_values
+from app.utils import parse_grade_values, normalize_username, username_taken
 from datetime import date
 
 # Типы оценок журнала. Зачёт/незачёт — без подтипа: это сам результат,
@@ -465,12 +465,19 @@ class StaffForm(FlaskForm):
                 EqualTo('password', message='Пароли не совпадают')]
 
     def validate_username(self, field):
-        from app.models import User
-        query = User.query.filter(User.username == field.data)
-        if self.user is not None:
-            query = query.filter(User.id != self.user.id)
-        if query.first():
-            raise ValidationError('Такой логин уже занят')
+        # Сравнение без учёта регистра: SQLite и MySQL считают 'admin' и 'ADMIN'
+        # разными логинами, и при входе победила бы первая по id запись — вместо
+        # той, чей пароль ввёл человек. Плюс пробелы по краям: « admin» и
+        # «admin» должны быть одним и тем же логином.
+        name = normalize_username(field.data)
+        if not name:
+            raise ValidationError('Введите логин')
+        exclude_id = self.user.id if self.user is not None else None
+        if username_taken(name, exclude_id=exclude_id):
+            raise ValidationError(
+                'Логин занят. Регистр не имеет значения: «admin» и «ADMIN» — '
+                'одна и та же учётная запись')
+        field.data = name
 
 
 class StaffPasswordResetForm(FlaskForm):
@@ -492,6 +499,22 @@ class AccountPasswordForm(FlaskForm):
         'Повторите новый пароль*',
         validators=[EqualTo('new_password', message='Пароли не совпадают')])
     submit = SubmitField('Изменить пароль')
+
+
+class StudentAccountForm(FlaskForm):
+    """Выдача или сброс пароля ученической учётной записи (Фаза 11).
+
+    Логин не вводится: он равен номеру зачётки, который уже записан в
+    карточке студента. Дублировать его в форме означало бы разрешить
+    расхождение — учётная запись в журнале входов под одним именем, а
+    зачётка в ведомости под другим.
+    """
+    password = PasswordField(
+        'Временный пароль*', validators=[DataRequired(), Length(min=6, max=128)])
+    confirm_password = PasswordField(
+        'Повторите пароль*',
+        validators=[EqualTo('password', message='Пароли не совпадают')])
+    submit = SubmitField('Сохранить пароль')
 
 class GradeForm(FlaskForm):
     student_id = SelectField('Студент*', coerce=int, validators=[DataRequired()], choices=[])

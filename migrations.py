@@ -38,6 +38,8 @@ COLUMNS = [
     # Фаза 7: вид периодов (четверти или семестры) и отметки о занятиях
     ('system_settings', 'period_kind',
      "period_kind VARCHAR(20) DEFAULT 'quarter' NOT NULL"),
+    # Фаза 11: пароль выдан администратором и ещё не заменён пользователем
+    ('user', 'password_temporary', 'password_temporary BOOLEAN DEFAULT 0'),
 ]
 
 # Индексы и ограничения, которые create_all() не добавит к уже существующей

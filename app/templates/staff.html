@@ -149,34 +149,14 @@
         <h5 class="mb-0"><i class="bi bi-mortarboard me-2"></i>Учётные записи студентов</h5>
     </div>
     <div class="card-body">
-        <p class="text-muted">
+        <p class="text-muted mb-3">
             Логином студента служит его номер зачётки, пароль выдаётся один раз.
-            Уже созданные учётные записи не изменяются и не удаляются — для этого
-            есть блокировка и сброс пароля.
+            Выдача, сброс, блокировка и список всех ученических аккаунтов —
+            в отдельном разделе.
         </p>
-        <form method="POST" action="{{ url_for('main.create_student_accounts') }}" class="row g-3 align-items-end">
-            <div class="col-md-4">
-                <label class="form-label">Группа</label>
-                <select name="group" class="form-select">
-                    <option value="">Все группы</option>
-                    {% for group in groups %}
-                    <option value="{{ group.id }}">{{ group.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">Статус</label>
-                <select name="status" class="form-select">
-                    <option value="active">Учится</option>
-                    <option value="all">Любой</option>
-                </select>
-            </div>
-            <div class="col-md-4">
-                <button type="submit" class="btn btn-success w-100">
-                    <i class="bi bi-person-check"></i> Выдать учётные записи
-                </button>
-            </div>
-        </form>
+        <a href="{{ url_for('main.accounts') }}" class="btn btn-primary">
+            <i class="bi bi-person-badge"></i> Учётные записи студентов
+        </a>
     </div>
 </div>
 
