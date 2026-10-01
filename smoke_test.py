@@ -91,6 +91,7 @@ PAGES = [
     ('/staff/add', 'создание сотрудника'),
     ('/my/password', 'смена собственного пароля'),
     ('/settings', 'настройки'),
+
     ('/settings/backup', 'резервные копии'),
     ('/settings/import', 'импорт данных'),
     ('/settings/logs', 'журнал событий'),
@@ -103,6 +104,61 @@ PAGES = [
     ('/api/system/download-logs', 'скачивание журнала'),
     ('/health', 'health-check'),
 ]
+
+# Кабинет студента (Фаза 12) — отдельный проход: страницы закрыты для
+# сотрудника, а пароль студента у теста неизвестен. Сессия подставляется
+# напрямую — smoke проверяет отрисовку, а не права (это roles_test).
+STUDENT_PAGES = [
+    ('/portal', 'кабинет студента'),
+    ('/portal/grades', 'мои оценки'),
+    ('/portal/grades?view=group', 'сводная по своей группе'),
+    ('/portal/attendance', 'мои пропуска'),
+    ('/my/password', 'смена пароля студентом'),
+    ('/my/account', 'старый адрес кабинета'),
+]
+
+
+def student_session():
+    """Клиент, вошедший как студент с учётной записью."""
+    with app.app_context():
+        student = (Student.query
+                   .filter(Student.user_id.isnot(None))
+                   .order_by(Student.id).first())
+        if student is None:
+            return None, None
+        return student, student.user_id
+
+
+def check_pages(client, pages, failures):
+    for url, title in pages:
+        try:
+            resp = client.get(url, follow_redirects=True)
+        except Exception as e:
+            failures.append((url, f'исключение: {type(e).__name__}: {e}'))
+            print(f'✗ {url:42} {title:32} ИСКЛЮЧЕНИЕ: {e}')
+            continue
+
+        status = resp.status_code
+        content_type = resp.headers.get('Content-Type', '')
+        is_binary = not content_type.startswith('text/')
+        body = '' if is_binary else resp.get_data(as_text=True)
+
+        if status != 200:
+            failures.append((url, status))
+            print(f'✗ {url:42} {title:32} HTTP {status}')
+        elif is_binary:
+            print(f'✓ {url:42} {title:32} {status} (файл, {len(resp.get_data())} байт)')
+        elif 'BuildError' in body or 'jinja2.exceptions' in body:
+            failures.append((url, 'BuildError в теле ответа'))
+            print(f'✗ {url:42} {title:32} BuildError')
+        elif 'Internal Server Error' in body:
+            failures.append((url, '500 внутри'))
+            print(f'✗ {url:42} {title:32} внутренняя ошибка')
+        elif is_login_page(resp):
+            failures.append((url, 'редирект на страницу входа'))
+            print(f'✗ {url:42} {title:32} открывает форму входа вместо страницы')
+        else:
+            print(f'✓ {url:42} {title:32} {status}')
 
 
 def main():
@@ -143,52 +199,34 @@ def main():
 
         print('✓ Вход выполнен, сессия активна\n')
 
-        for url, title in PAGES:
-            try:
-                resp = client.get(url, follow_redirects=True)
-            except Exception as e:
-                failures.append((url, f'исключение: {type(e).__name__}: {e}'))
-                print(f'✗ {url:42} {title:32} ИСКЛЮЧЕНИЕ: {e}')
-                continue
+        check_pages(client, PAGES, failures)
 
-            status = resp.status_code
-            content_type = resp.headers.get('Content-Type', '')
-
-            # Выгрузки (xlsx) — это zip-архив, его нельзя декодировать
-            # как текст. Такие ответы проверяем только по коду.
-            is_binary = not content_type.startswith('text/')
-            body = '' if is_binary else resp.get_data(as_text=True)
-
-            # Страница отрендерилась, но внутри — ошибка Jinja
-            if status != 200:
-                failures.append((url, status))
-                print(f'✗ {url:42} {title:32} HTTP {status}')
-            elif is_binary:
-                print(f'✓ {url:42} {title:32} {status} (файл, {len(resp.get_data())} байт)')
-            elif 'BuildError' in body or 'jinja2.exceptions' in body:
-                failures.append((url, 'BuildError в теле ответа'))
-                print(f'✗ {url:42} {title:32} BuildError')
-            elif 'Internal Server Error' in body:
-                failures.append((url, '500 внутри'))
-                print(f'✗ {url:42} {title:32} внутренняя ошибка')
-            elif is_login_page(resp):
-                failures.append((url, 'редирект на страницу входа'))
-                print(f'✗ {url:42} {title:32} открывает форму входа вместо страницы')
-            else:
-                print(f'✓ {url:42} {title:32} {status}')
+    # Проход по кабинету студента
+    _, student_user_id = student_session()
+    if student_user_id is None:
+        print('  (студентов с учётной записью нет — кабинет не проверяем)')
+    else:
+        print()
+        with app.test_client() as pupil:
+            with pupil.session_transaction() as session:
+                session['_user_id'] = str(student_user_id)
+                session['_fresh'] = True
+            check_pages(pupil, STUDENT_PAGES, failures)
 
     return finish(failures)
 
 
 def finish(failures):
+    total = len(PAGES) + len(STUDENT_PAGES)
     print()
     if failures:
-        print(f'❌ Провалено проверок: {len(failures)} из {len(PAGES)}')
+        print(f'❌ Провалено проверок: {len(failures)} из {total}')
         for url, err in failures:
             print(f'   - {url}: {err}')
         return 1
-    print(f'✅ Все {len(PAGES)} страниц открылись без ошибок (вход подтверждён)')
+    print(f'✅ Все {total} страниц открылись без ошибок (вход подтверждён)')
     return 0
+
 
 
 if __name__ == '__main__':

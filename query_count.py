@@ -56,3 +56,42 @@ with app.test_client() as client:
             print('    >', ' '.join(str(s).split())[:80])
 
     print(f'\nвсего SELECT за один проход: {total}')
+
+# Кабинет студента (Фаза 12) считаем отдельно: админский вход его не видит,
+# а страницы должны обходиться без N+1 — по запросу на каждого одногруппника
+# таблица сводной вырождалась бы в отдельный SELECT на студента.
+with app.app_context():
+    from app.models import Student
+    pupil = (Student.query
+             .filter(Student.user_id.isnot(None))
+             .order_by(Student.id).first())
+    pupil_user_id = pupil.user_id if pupil else None
+
+if pupil_user_id is None:
+    print('\n(студентов с учётной записью нет — кабинет не считаем)')
+else:
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session['_user_id'] = str(pupil_user_id)
+            session['_fresh'] = True
+
+        total = 0
+        for url in ['/portal', '/portal/grades', '/portal/grades?view=group',
+                    '/portal/attendance']:
+            statements = []
+
+            def before_cursor(conn, cursor, stmts, ctx, many, exec_ctx=None):
+                statements.append(str(stmts).strip())
+
+            event.listen(engine, 'before_cursor_execute', before_cursor)
+            resp = client.get(url)
+            event.remove(engine, 'before_cursor_execute', before_cursor)
+
+            selects = [s for s in statements if s.upper().startswith('SELECT')]
+            total += len(selects)
+            print(f'\n{url:26} {resp.status_code}  SELECT={len(selects)}  '
+                  f'всего={len(statements)}')
+            for s in statements:
+                print('    >', ' '.join(str(s).split())[:80])
+
+        print(f'\nвсего SELECT по кабинету: {total}')

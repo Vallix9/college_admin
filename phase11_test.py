@@ -525,7 +525,7 @@ def run_checks():
         student_session = app.test_client()
         login(student_session, target['login'], shown[0].strip())
         check('после разблокировки студент снова входит',
-              student_session.get('/my/account').status_code == 200)
+              student_session.get('/portal').status_code == 200)
 
     # смена своего пароля снимает признак временного
     if shown:
@@ -548,7 +548,7 @@ def run_checks():
         relogin = app.test_client()
         login(relogin, target['login'], 'SvoyParol777')
         check('вход с новым паролем удаётся',
-              relogin.get('/my/account').status_code == 200)
+              relogin.get('/portal').status_code == 200)
 
     # удаление записи, студент остаётся
     with app.app_context():
@@ -603,9 +603,9 @@ def run_checks():
     check('преподаватель не качает ведомость с паролями',
           other.get('/accounts/credentials/любой.xlsx').status_code == 403)
     check('в меню преподавателя нет пункта «Учётные записи»',
-          'Учётные записи</span>' not in other.get('/').get_data(as_text=True))
+          'Учётные записи</span>' not in other.get('/dashboard').get_data(as_text=True))
 
-    admin_html = admin_client().get('/').get_data(as_text=True)
+    admin_html = admin_client().get('/dashboard').get_data(as_text=True)
     check('в меню администратора есть пункт «Учётные записи»',
           'Учётные записи</span>' in admin_html)
     check('в меню ведёт на /accounts', 'href="/accounts"' in admin_html)

@@ -219,7 +219,7 @@ def current_student():
 def home_url():
     """Куда отправлять пользователя после входа и с главной кнопки."""
     if current_user.is_authenticated and current_user.is_student:
-        return url_for('main.my_account')
+        return url_for('main.portal')
     return url_for('main.dashboard')
 
 
@@ -270,6 +270,16 @@ def schedule_conflict(group_id, day, lesson, teacher_id, item_id=None):
 
 # ===================== АУТЕНТИФИКАЦИЯ =====================
 @main.route('/')
+@login_required
+def index():
+    """Корень сайта: сотрудник — сводка, студент — кабинет.
+
+    Раньше `/` был тем же маршрутом, что и `/dashboard`, и студент,
+    вписавший адрес вручную, получал 403 вместо своего кабинета.
+    """
+    return redirect(home_url())
+
+
 @main.route('/dashboard')
 @staff_required
 def dashboard():
@@ -312,13 +322,17 @@ def login():
         # объяснял бы это студенту, который путает заглавные буквы.
         user = find_user_by_login(form.username.data)
         
-        if user and not user.is_active:
-            # Отказ именно до проверки пароля: неактивному пользователю
-            # не нужно подтверждать, что он вводит правильный пароль
+        # Пароль проверяется всегда, даже у отключённой записи. Иначе
+        # «Учётная запись отключена» отвечала бы на любой логин, который
+        # существует, и по подбору можно было бы узнать, какие логины в
+        # системе есть. С верным паролем сообщение остаётся полезным.
+        password_ok = user is not None and user.check_password(form.password.data)
+
+        if password_ok and not user.is_active:
             log.warning('Попытка входа заблокированного пользователя «%s» с %s',
                         form.username.data, request.remote_addr)
             flash_msg('error', 'Учётная запись отключена. Обратитесь к администратору.')
-        elif user and user.check_password(form.password.data):
+        elif password_ok:
             login_user(user, remember=form.remember_me.data)
             next_page = request.args.get('next')
             
@@ -333,6 +347,8 @@ def login():
             return redirect(next_page)
         
         else:
+            # Одно сообщение и на несуществующий логин, и на неверный пароль:
+            # разные ответы сказали бы проверяющему, какие логины в системе есть
             log.warning('Неудачная попытка входа: логин «%s» с %s',
                         form.username.data, request.remote_addr)
             flash_msg('error', 'Неверное имя пользователя или пароль')
@@ -2980,39 +2996,364 @@ def delete_student_account(id):
     return redirect(url_for('main.accounts'))
 
 
-# ===================== ЛИЧНЫЙ КАБИНЕТ =====================
+# ===================== ЛИЧНЫЙ КАБИНЕТ СТУДЕНТА =====================
+# Изоляция данных (12.8): все выборки кабинета строятся от current_student(),
+# который берёт student_id из сессии. Ни один маршрут ниже не принимает
+# student_id или group_id из URL — иначе студент подставил бы чужой id
+# в адресную строку и увидел бы чужую успеваемость.
+
+def portal_period_choice(period_id):
+    """Период кабинета: из запроса, иначе тот, в который попадает сегодня.
+
+    В отличие от current_period_or_default() не отвечает 404, когда периодов
+    в базе нет: кабинет студента должен открыться и сказать, что периоды
+    ещё не заведены, а не показывать страницу ошибки админ-раздела.
+    """
+    if period_id:
+        period = db.session.get(AcademicPeriod, period_id)
+        if period is not None:
+            return period
+    today = date.today()
+    period = (AcademicPeriod.query
+              .filter(AcademicPeriod.start_date <= today,
+                      AcademicPeriod.end_date >= today)
+              .order_by(AcademicPeriod.sort_order.desc()).first())
+    if period:
+        return period
+    # Дата вне учебного года (лето, каникулы) — показываем последний период
+    return (AcademicPeriod.query
+            .order_by(AcademicPeriod.academic_year.desc(),
+                      AcademicPeriod.sort_order.desc()).first())
+
+
+def portal_periods(period):
+    """Периоды того же учебного года и ближайший следующий (12.2).
+
+    Период из сессии в список не всегда попадает: он может быть годовым или
+    относиться к другому году, а список фильтруется по его academic_year.
+    """
+    if period is None:
+        return [], None
+    periods_list = (AcademicPeriod.query
+                    .filter_by(academic_year=period.academic_year)
+                    .order_by(AcademicPeriod.sort_order).all())
+    if all(item.id != period.id for item in periods_list):
+        periods_list = sorted(periods_list + [period],
+                              key=lambda item: item.sort_order)
+    index = next((i for i, item in enumerate(periods_list)
+                  if item.id == period.id), None)
+    following = periods_list[index + 1] if index is not None else None
+    return periods_list, following
+
+
+def portal_subjects(student):
+    """Предметы студента: из расписания его группы плюс те, где у него оценки.
+
+    Расписание нужно, чтобы в кабинете был предмет, по которому оценок ещё
+    нет: иначе новый студент увидел бы пустую таблицу и решил бы, что ему
+    ничего не преподавали. Оценки добавляются отдельно — предмет мог остаться
+    в оценках после того, как его убрали из расписания.
+    """
+    subject_ids = {row[0] for row in
+                   (db.session.query(Grade.subject_id)
+                    .filter_by(student_id=student.id).distinct().all())}
+    if student.group_id:
+        subject_ids.update(
+            row[0] for row in
+            (db.session.query(ScheduleItem.subject_id)
+             .filter_by(group_id=student.group_id).distinct().all()))
+    if not subject_ids:
+        return []
+    return (Subject.query
+            .filter(Subject.id.in_(subject_ids))
+            .order_by(Subject.name).all())
+
+
+def portal_grades_by_subject(student_id, period, subject_ids):
+    """Оценки за период, разложенные по предметам: {subject_id: [Grade]}.
+
+    Пустой subject_ids даёт пустой словарь, а не запрос с пустым IN (): такой
+    SQL невалиден, и страница кабинета падала бы на группе без расписания.
+    """
+    if period is None or not subject_ids:
+        return {}
+    rows = (Grade.query
+            .filter(Grade.student_id == student_id,
+                    Grade.period_id == period.id,
+                    Grade.subject_id.in_(subject_ids))
+            .order_by(Grade.subject_id, Grade.date, Grade.id).all())
+    grouped = {}
+    for grade in rows:
+        grouped.setdefault(grade.subject_id, []).append(grade)
+    return grouped
+
+
+def portal_final_grades(student_id, period, subject_ids):
+    """Итоговые оценки за период: {(subject_id): PeriodResult}."""
+    if period is None or not subject_ids:
+        return {}
+    rows = (PeriodResult.query
+            .filter(PeriodResult.student_id == student_id,
+                    PeriodResult.period_id == period.id,
+                    PeriodResult.subject_id.in_(subject_ids)).all())
+    return {row.subject_id: row for row in rows}
+
+
+def portal_own_attendance(student, period):
+    """Пропуски самого студента за период со сводкой по причинам (12.6).
+
+    Число пар не берём из AttendanceRecord.hours_count: свойство делает запрос
+    на каждую отметку, а отметок за четверть бывает несколько десятков.
+    Расписание по дням считается один раз и переиспользуется.
+    """
+    empty = {'records': [], 'total': 0, 'hours': 0, 'reasons': {}}
+    if period is None:
+        return empty
+
+    lessons_per_day = {}
+    if student.group_id:
+        rows = (db.session.query(ScheduleItem.day_of_week,
+                                 func.count(ScheduleItem.id))
+                .filter_by(group_id=student.group_id)
+                .group_by(ScheduleItem.day_of_week).all())
+        lessons_per_day = {day: count for day, count in rows}
+
+    records = (AttendanceRecord.query
+               .options(joinedload(AttendanceRecord.subject))
+               .filter(AttendanceRecord.student_id == student.id,
+                       AttendanceRecord.date >= period.start_date,
+                       AttendanceRecord.date <= period.end_date)
+               .order_by(AttendanceRecord.date.desc(),
+                         AttendanceRecord.id.desc()).all())
+
+    reasons = {reason: 0 for reason, _ in attendance_reason_choices()}
+    total = 0
+    hours = 0
+    for record in records:
+        total += 1
+        # Отметка без предмета — «отсутствовал весь день»: это все пары дня
+        hours += 1 if record.subject_id else lessons_per_day.get(
+            record.date.weekday() + 1, 0)
+        if record.reason in reasons:
+            reasons[record.reason] += 1
+
+    return {'records': records, 'total': total, 'hours': hours,
+            'reasons': reasons}
+
+
+def portal_context(period_id=None):
+    """Общие данные кабинета: студент из сессии, период, периоды, предметы.
+
+    Возвращает (ctx, failure). failure не None только если период запрошен
+    несуществующий — молча подставлять другой период значило бы показать
+    студенту не тот период, который он выбрал.
+    """
+    student = current_student()
+    if student is None:
+        return {'student': None}, None
+
+    if period_id:
+        period = db.session.get(AcademicPeriod, period_id)
+        if period is None:
+            return None, (render_template(
+                'error.html', code=404,
+                message='Учебный период не найден.'), 404)
+    else:
+        period = portal_period_choice(None)
+
+    periods_list, following = portal_periods(period)
+    subjects = portal_subjects(student)
+    return {
+        'student': student,
+        'group': student.group,
+        'period': period,
+        'periods': periods_list,
+        'next_period': following,
+        'subjects': subjects,
+    }, None
+
+
+@main.route('/portal')
+@student_required
+def portal():
+    """Кабинет студента: сводка по предметам, пропуски, ближайший период (12.2)."""
+    ctx, failure = portal_context()
+    if failure:
+        return failure
+
+    student = ctx['student']
+    if student is None:
+        return render_template('portal_dashboard.html', **ctx)
+
+    period = ctx['period']
+    subject_ids = [subject.id for subject in ctx['subjects']]
+    cells = []
+    all_grades = []
+    if period is not None:
+        grouped = portal_grades_by_subject(student.id, period, subject_ids)
+        finals = portal_final_grades(student.id, period, subject_ids)
+        for subject in ctx['subjects']:
+            grades = grouped.get(subject.id, [])
+            all_grades.extend(grades)
+            result = finals.get(subject.id)
+            cells.append({
+                'subject': subject,
+                'count': len(grades),
+                'average': average_grade(grades),
+                'grades': grades,
+                'final': result.final_value if result else None,
+            })
+
+    return render_template(
+        'portal_dashboard.html', **ctx,
+        cells=cells,
+        average=average_grade(all_grades),
+        count=len(all_grades),
+        attendance=portal_own_attendance(student, period),
+        has_periods=bool(ctx['periods']),
+    )
+
+
+@main.route('/portal/grades')
+@student_required
+def portal_grades():
+    """Свои оценки по предметам и периодам; сводная по группе — read-only (12.3–12.5)."""
+    ctx, failure = portal_context(request.args.get('period_id', type=int))
+    if failure:
+        return failure
+
+    student = ctx['student']
+    if student is None:
+        return render_template('portal_grades.html', **ctx, view='mine',
+                               cells=[], rows=[], average=0, count=0,
+                               classmates=[], has_periods=False)
+
+    # Режим приходит из URL, но проверяется по белому списку: иначе в шаблон
+    # попадёт произвольная строка, а вместе с ней — лишний запрос
+    view = request.args.get('view', 'mine')
+    if view not in ('mine', 'group'):
+        view = 'mine'
+
+    period = ctx['period']
+    subject_ids = [subject.id for subject in ctx['subjects']]
+    cells = []
+    all_grades = []
+    if period is not None and view == 'mine':
+        grouped = portal_grades_by_subject(student.id, period, subject_ids)
+        finals = portal_final_grades(student.id, period, subject_ids)
+        for subject in ctx['subjects']:
+            grades = grouped.get(subject.id, [])
+            all_grades.extend(grades)
+            result = finals.get(subject.id)
+            cells.append({
+                'subject': subject,
+                'count': len(grades),
+                'average': average_grade(grades),
+                'grades': grades,
+                'final': result.final_value if result else None,
+            })
+
+    # Сводная по группе: только своя группа, только чтение. Среднего балла
+    # группы и места в рейтинге здесь нет намеренно (12.4, 12.9) — по среднему
+    # баллу группы любой список студентов читается как рейтинг, даже если
+    # места не пронумерованы.
+    classmates = []
+    rows = []
+    if view == 'group' and student.group_id and period is not None \
+            and subject_ids:
+        classmates = (Student.query
+                      .filter_by(group_id=student.group_id, status='active')
+                      .order_by(Student.last_name, Student.first_name).all())
+        if classmates:
+            rows_map = {}
+            for grade in (Grade.query
+                          .filter(Grade.student_id.in_(
+                                      [mate.id for mate in classmates]),
+                                  Grade.period_id == period.id,
+                                  Grade.subject_id.in_(subject_ids))
+                          .order_by(Grade.student_id, Grade.subject_id,
+                                    Grade.date).all()):
+                rows_map.setdefault((grade.student_id, grade.subject_id),
+                                    []).append(grade)
+            finals_map = {(row.student_id, row.subject_id): row for row in
+                          (PeriodResult.query
+                           .filter(PeriodResult.student_id.in_(
+                                       [mate.id for mate in classmates]),
+                                   PeriodResult.period_id == period.id,
+                                   PeriodResult.subject_id.in_(subject_ids))
+                           .all())}
+            for mate in classmates:
+                mate_cells = []
+                for subject in ctx['subjects']:
+                    grades = rows_map.get((mate.id, subject.id), [])
+                    result = finals_map.get((mate.id, subject.id))
+                    mate_cells.append({
+                        'subject': subject,
+                        'count': len(grades),
+                        'average': average_grade(grades),
+                        'grades': grades,
+                        'final': result.final_value if result else None,
+                    })
+                rows.append({'student': mate, 'cells': mate_cells,
+                             'is_me': mate.id == student.id})
+
+    return render_template(
+        'portal_grades.html', **ctx,
+        view=view, cells=cells, rows=rows,
+        average=average_grade(all_grades), count=len(all_grades),
+        classmates=classmates, has_periods=bool(ctx['periods']),
+    )
+
+
+@main.route('/portal/attendance')
+@student_required
+def portal_attendance():
+    """Свои пропуски с причинами и итогом за период (12.6)."""
+    ctx, failure = portal_context(request.args.get('period_id', type=int))
+    if failure:
+        return failure
+
+    student = ctx['student']
+    if student is None:
+        return render_template('portal_attendance.html', **ctx, summary=None,
+                               has_periods=False)
+
+    return render_template(
+        'portal_attendance.html', **ctx,
+        summary=portal_own_attendance(student, ctx['period']),
+        reasons=attendance_reason_choices(),
+        has_periods=bool(ctx['periods']),
+    )
+
+
 @main.route('/my/account')
 @login_required
 def my_account():
-    """Личный кабинет. Сотруднику — сводка, студенту — его данные."""
+    """Старый адрес кабинета. Оставлен редиректом: закладки и ссылки из
+    писем не должны превращаться в 404 после появления /portal."""
     if not current_user.is_student:
         return redirect(url_for('main.dashboard'))
-
-    student = current_student()
-    if student is None:
-        # Аксаунт есть, а записи студента нет: показываем это прямо,
-        # а не пустую страницу
-        return render_template('account.html', student=None, grades=[],
-                               average=None, form=AccountPasswordForm())
-
-    # student.grades — уже загруженный список, порядок задаём запросом
-    grades_list = (Grade.query
-                   .filter_by(student_id=student.id)
-                   .options(joinedload(Grade.subject))
-                   .order_by(Grade.date.desc(), Grade.id.desc()).all())
-    return render_template('account.html', student=student, grades=grades_list,
-                           average=average_grade(grades_list),
-                           form=AccountPasswordForm())
+    return redirect(url_for('main.portal'))
 
 
 @main.route('/my/password', methods=['GET', 'POST'])
 @login_required
 def change_password():
-    """Смена собственного пароля"""
+    """Смена собственного пароля.
+
+    Студенту показывается форма в оформлении кабинета, сотруднику — общая
+    страница админ-панели. Логика одна, чтобы правила паролей не расходились.
+    """
     form = AccountPasswordForm()
     if form.validate_on_submit():
         if not current_user.check_password(form.current_password.data):
             flash_msg('error', 'Текущий пароль указан неверно')
+        elif form.new_password.data == form.current_password.data:
+            # Молча принимать такой пароль нельзя: человек уходит, уверенный,
+            # что сменил пароль, а старый продолжает работать. И это же —
+            # самый частый пароль, если человек не понял задачу.
+            flash_msg('error', 'Новый пароль совпадает с текущим. '
+                                'Придумайте другой.')
         else:
             current_user.set_password(form.new_password.data)
             # Свой пароль вместо выданного — значит, человек его запомнил.
@@ -3022,6 +3363,10 @@ def change_password():
             log.info('Пользователь %s сменил пароль', current_user.username)
             flash_msg('success', 'Пароль успешно изменён')
             return redirect(request.referrer or home_url())
+
+    if current_user.is_student:
+        return render_template('portal_password.html', form=form,
+                               student=current_student())
     return render_template('password_form.html', form=form,
                            title='Смена пароля')
 

@@ -73,8 +73,26 @@ def create_app(config_class='config.Config'):
                 'can_manage_data': current_user.is_authenticated
                 and current_user.can_manage_data}
 
+    # Меню кабинета студента. Отдельное от nav_items_for(): там состав
+    # зависит от роли и пополняется админскими разделами, а здесь три
+    # фиксированных пункта, одинаковых для всех студентов.
+    @app.context_processor
+    def portal_menu_processor():
+        from flask_login import current_user
+        return {'portal_nav_items': portal_items_for(current_user)}
 
     return app
+
+
+def portal_items_for(user):
+    """Пункты верхнего меню личного кабинета."""
+    if not user.is_authenticated or not user.is_student:
+        return []
+    return [
+        {'endpoint': 'main.portal', 'icon': 'bi-speedometer2', 'label': 'Кабинет'},
+        {'endpoint': 'main.portal_grades', 'icon': 'bi-journal-check', 'label': 'Оценки'},
+        {'endpoint': 'main.portal_attendance', 'icon': 'bi-person-x', 'label': 'Пропуска'},
+    ]
 
 
 def nav_items_for(user):
@@ -90,8 +108,12 @@ def nav_items_for(user):
     is_student = user.is_student
 
     if is_student:
-        return [{'endpoint': 'main.my_account', 'icon': 'bi-person-badge',
-                 'label': 'Мой кабинет'}]
+        return [{'endpoint': 'main.portal', 'icon': 'bi-person-badge',
+                 'label': 'Кабинет'},
+                {'endpoint': 'main.portal_grades', 'icon': 'bi-journal-check',
+                 'label': 'Мои оценки'},
+                {'endpoint': 'main.portal_attendance', 'icon': 'bi-person-x',
+                 'label': 'Мои пропуска'}]
 
     items = [
         {'endpoint': 'main.dashboard', 'icon': 'bi-speedometer2',

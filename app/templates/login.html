@@ -53,8 +53,8 @@
                 <img src="{{ url_for('static', filename='img/logo.png') }}" 
                      alt="Логотип" 
                      class="logo">
-                <h4 class="fw-bold text-dark">Колледж Админ</h4>
-                <p class="text-muted mb-0">Вход в административную панель</p>
+                <h4 class="fw-bold text-dark">Колледж</h4>
+                <p class="text-muted mb-0">Вход в систему</p>
             </div>
             
             {% with messages = get_flashed_messages(with_categories=true) %}
@@ -68,12 +68,13 @@
                 {% endif %}
             {% endwith %}
             
-            <!-- ИСПРАВЛЕНО: url_for('main.login') -->
+            <!-- Одна форма на всех: сотрудник входит по своему логину,
+                 студент — по номеру зачётки (12.1) -->
             <form method="POST" action="{{ url_for('main.login') }}">
                 {{ form.hidden_tag() }}
                 <div class="mb-3">
                     {{ form.username.label(class="form-label fw-medium") }}
-                    {{ form.username(class="form-control", placeholder="name", required=True) }}
+                    {{ form.username(class="form-control", placeholder="Логин или номер зачётки", required=True, autofocus=true) }}
                 </div>
                 
                 <div class="mb-4">

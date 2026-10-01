@@ -1,0 +1,173 @@
+{% extends "portal_base.html" %}
+
+{% block title %}Кабинет{% endblock %}
+
+{% block content %}
+{% if not student %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Учётная запись не связана ни с одной записью студента.
+    Сообщите администратору — он перепривяжет её к вашему номеру зачётки.
+</div>
+{% else %}
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-4">
+    <div>
+        <h1 class="h4 fw-bold mb-1">{{ student.full_name }}</h1>
+        <p class="text-muted mb-0">
+            Зачётка {{ student.student_id }}
+            {% if group %}· группа {{ group.name }}{% endif %}
+            {% if student.status == 'active' %}
+                · <span class="badge bg-success">учится</span>
+            {% elif student.status == 'academic_leave' %}
+                · <span class="badge bg-warning">академический отпуск</span>
+            {% else %}
+                · <span class="badge bg-secondary">отчислен</span>
+            {% endif %}
+        </p>
+    </div>
+    {% if period %}
+    <div class="text-md-end">
+        <span class="text-muted small">Текущий период</span><br>
+        <strong>{{ period.label }}</strong>
+        <span class="text-muted small">({{ period.start_date.strftime('%d.%m') }} — {{ period.end_date.strftime('%d.%m.%Y') }})</span>
+        {% if next_period %}
+        <br><span class="text-muted small">Далее: {{ next_period.label }}</span>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+{% if current_user.password_temporary %}
+<div class="alert alert-warning d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span>
+        <i class="bi bi-shield-exclamation"></i>
+        Пароль выдан вам администратором и ещё не изменён.
+        Смените его — иначе его знают те, кому выдан.
+    </span>
+    <a href="{{ url_for('main.change_password') }}" class="btn btn-sm btn-warning">
+        <i class="bi bi-key"></i> Сменить пароль
+    </a>
+</div>
+{% endif %}
+
+{% if not has_periods %}
+<div class="alert alert-info">
+    <i class="bi bi-info-circle"></i>
+    Учебные периоды ещё не заведены, поэтому оценки и пропуски показать не по чему.
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Средний балл</div>
+                <div class="fs-3 fw-bold">
+                    {% if count %}{{ average }}{% else %}<span class="text-muted fs-5">—</span>{% endif %}
+                </div>
+                <div class="text-muted small">только ваш, за текущий период</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Оценок за период</div>
+                <div class="fs-3 fw-bold">{{ count }}</div>
+                <div class="text-muted small">{{ subjects|length }} предмет(ов)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Пропусков</div>
+                <div class="fs-3 fw-bold">
+                    {% if attendance.hours %}
+                        <span class="{% if attendance.hours >= 20 %}text-danger{% else %}text-warning{% endif %}">{{ attendance.hours }}</span>
+                    {% else %}
+                        <span class="text-success">{{ attendance.total }}</span>
+                    {% endif %}
+                </div>
+                <div class="text-muted small">
+                    {% if attendance.hours %}пар{% else %}дней{% endif %} за период
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Без уважительной причины</div>
+                <div class="fs-3 fw-bold">
+                    {{ attendance.reasons.get('unexcused', 0) }}
+                </div>
+                <div class="text-muted small">
+                    <a href="{{ url_for('main.portal_attendance') }}">все пропуски</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="mb-0"><i class="bi bi-journal-check me-2"></i>Мои оценки по предметам</span>
+        <a href="{{ url_for('main.portal_grades') }}" class="btn btn-sm btn-outline-secondary">
+            Подробнее
+        </a>
+    </div>
+    <div class="card-body">
+        {% if cells %}
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Предмет</th>
+                        <th class="text-center">Оценок</th>
+                        <th class="text-center">Средний</th>
+                        <th>Оценки за период</th>
+                        <th class="text-center">Итог</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cell in cells %}
+                    <tr>
+                        <td>{{ cell.subject.name }}</td>
+                        <td class="text-center">{{ cell.count }}</td>
+                        <td class="text-center">
+                            {% if cell.count %}<strong>{{ cell.average }}</strong>{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if cell.grades %}
+                                {% for grade in cell.grades %}
+                                <span class="badge grade-chip {{ grade.get_grade_color() }}" title="{{ grade.date.strftime('%d.%m.%Y') }}{% if grade.comments %} — {{ grade.comments }}{% endif %}">{{ grade.grade_value }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted">нет</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if cell.final %}
+                                <span class="badge {{ 'bg-success' if cell.final in ('5', 'зачет', 'зачёт') else ('bg-primary' if cell.final == '4' else ('bg-warning' if cell.final == '3' else 'bg-danger')) }}">{{ cell.final }}</span>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-5">
+            <i class="bi bi-inbox display-5 d-block mb-2"></i>
+            Оценок пока нет
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}

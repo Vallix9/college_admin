@@ -61,8 +61,13 @@ CHECKS = [
     ('/settings/backup',      200, 403,   403),
     ('/settings/import',      200, 403,   403),
     ('/settings/logs',        200, 403,   403),
-    ('/my/account',           302, 302,   200),
+    ('/my/account',           302, 302,   302),
     ('/my/password',          200, 200,   200),
+    # Фаза 12: кабинет студента и корень сайта
+    ('/',                     302, 302,   302),
+    ('/portal',               403, 403,   200),
+    ('/portal/grades',        403, 403,   200),
+    ('/portal/attendance',    403, 403,   200),
 ]
 
 
