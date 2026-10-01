@@ -10,20 +10,23 @@ import os
 from app.init_ import db
 from app.models import (User, Student, Group, Subject, Grade, SystemSettings,
                         AcademicPeriod, ScheduleItem, LessonDate,
-                        AttendanceRecord, GradeHistory)
+                        AttendanceRecord, GradeHistory, PeriodResult)
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountPasswordForm
 from app.forms import PeriodForm, PeriodGenerateForm, ScheduleItemForm, DeleteTokenForm
 from app.forms import ScheduleDayForm, LessonDateForm
-from app.forms import JournalGradeForm, JournalEditForm
+from app.forms import JournalGradeForm, JournalEditForm, PeriodResultForm
 from app.forms import (AttendanceMarkForm, AttendanceBulkForm,
                        AttendanceEditForm, attendance_reason_choices,
                        ALL_DAY_SUBJECT, ALL_DAY_LABEL)
 from app.utils import build_periods, parse_academic_year, teacher_choices
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
+from app.utils import EXPORT_DIR
+import pandas as pd
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
 from app.utils import get_logger, average_grade, build_import_template
 from app.utils import grade_distribution, journal_totals
+from app.utils import recommend_final_grade, grade_quality_stats
 from app.utils import read_log_lines, get_log_file_path, clear_log_file
 from app.utils import generate_password
 
@@ -1531,6 +1534,226 @@ def journal_subject_mode(group_id, subject_id, period_id, mode):
     return ctx, None
 
 
+def journal_export_frames(ctx):
+    """Таблицы журнала в виде обычных списков словарей (10.4, 10.5).
+
+    Собираем ровно из того же ctx, который уже отрисовал экран, иначе файл
+    и таблица рано или поздно разойдутся: правило округления, состав
+    колонок или фильтр по датам придётся менять в двух местах.
+
+    Первая строка каждой таблицы — заголовок, дальше данные. Значение ячейки
+    склеивается в строку, потому что в ячейке может быть несколько оценок и
+    пропусков, а в Excel это должна быть одна ячейка.
+    """
+    students = ctx['students']
+    columns = ctx['columns']
+    mode = ctx['mode']
+
+    def cell_text(student_id, column):
+        """Содержимое ячейки так, как его видит преподаватель: оценки и пропуски."""
+        parts = [str(grade.grade_value)
+                 for grade in ctx['cells'].get((student_id, column), [])]
+        parts += ['Н' for _ in ctx['attendance'].get((student_id, column), [])]
+        return ' '.join(parts)
+
+    grid = []
+    header = ['Студент']
+    for index, column in enumerate(columns):
+        if mode == 'subjects':
+            title = ctx['column_titles'][index]
+            summary = ctx['summary'].get(column)
+            header.append(f'{title} (ср. {summary})' if summary else title)
+        else:
+            header.append(column.strftime('%d.%m.%Y'))
+    header.append('Средний')
+    grid.append(header)
+
+    for student in students:
+        row = [f'{student.last_name} {student.first_name}']
+        row += [cell_text(student.id, column) for column in columns]
+        total = ctx['totals'].get(student.id)
+        row.append(total['average'] if total and total['count'] else '')
+        grid.append(row)
+
+    # Сводная таблица: те же студенты, но предметной раскладкой.
+    # В режиме «по датам» колонок-предметов в ctx нет, поэтому берём их из
+    # распределения оценок по предметам, которое уже посчитано для сводки.
+    summary_rows = [['Студент', 'Предмет', 'Оценок', 'Средний',
+                     'Распределение']]
+    if mode == 'subjects':
+        pairs = [((student.id, column), student)
+                 for student in students for column in columns]
+    else:
+        subject_id = ctx['subject'].id
+        pairs = [((student.id, subject_id), student) for student in students]
+    for (student_id, _column), student in pairs:
+        grades = ctx['cells'].get((student_id, _column), [])
+        if not grades and mode == 'subjects':
+            continue
+        distribution = grade_distribution(grades)
+        summary_rows.append([
+            f'{student.last_name} {student.first_name}',
+            ctx['subject'].name if mode != 'subjects'
+            else ctx['column_titles'][columns.index(_column)],
+            len(grades),
+            average_grade(grades) if grades else '',
+            ', '.join(f'{key} — {count}'
+                      for key, count in sorted(distribution.items())),
+        ])
+
+    # Пропуски отдельным листом: в сетке они сливаются с оценками, и
+    # посчитать их по файлу нельзя.
+    absence_rows = [['Студент', 'Дата', 'Предмет', 'Причина', 'Примечание']]
+    for student in students:
+        for column in columns:
+            for record in ctx['attendance'].get((student.id, column), []):
+                if mode == 'subjects':
+                    name = ctx['column_titles'][columns.index(column)]
+                else:
+                    name = ctx['subject'].name
+                absence_rows.append([
+                    f'{student.last_name} {student.first_name}',
+                    record.date.strftime('%d.%m.%Y'),
+                    name,
+                    record.reason_label,
+                    record.note or '',
+                ])
+
+    return grid, summary_rows, absence_rows
+
+
+def journal_export_csv_rows(ctx):
+    """Плоская таблица для 1С/ФМС (10.5).
+
+    Формат «одна строка — одна оценка» с заголовком из кодов предметов и
+    групп: так выгрузку можно грузить без ручной переработки. Пропуски идут
+    значением «Н», как в бумажном журнале, отдельной колонкой не нужны —
+    они привязаны к той же дате.
+    """
+    header = ['Студент', 'Группа', 'Предмет', 'Дата', 'Оценка', 'Пропуск']
+    rows = []
+    subject_name = ctx['subject'].name
+    for student in ctx['students']:
+        for column in ctx['columns']:
+            date_text = (column.strftime('%Y-%m-%d')
+                         if hasattr(column, 'strftime') else '')
+            grades = ctx['cells'].get((student.id, column), [])
+            absences = ctx['attendance'].get((student.id, column), [])
+            count = max(len(grades), len(absences), 1)
+            for index in range(count):
+                grade = grades[index] if index < len(grades) else None
+                record = absences[index] if index < len(absences) else None
+                if grade is None and record is None:
+                    continue
+                rows.append([
+                    student.student_id,
+                    ctx['group'].name,
+                    subject_name,
+                    date_text,
+                    grade.grade_value if grade else '',
+                    'Н' if record else '',
+                ])
+    return header, rows
+
+
+def journal_export_filename(ctx, extension):
+    """Имя файла из названия колонки, группы и периода — без слешей.
+
+    Название предмета может содержать «/» или «:», а такие имена не
+    переживают сохранение в Windows, поэтому приводим к безопасному виду.
+    """
+    subject = ctx['subject'].name
+    parts = ['журнал', ctx['group'].name, subject, ctx['period'].name]
+    safe = '-'.join(sanitize_filename(part) for part in parts)
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    return f'{safe}_{stamp}.{extension}'
+
+
+def save_export(filepath, sheets):
+    """Записать таблицы в xlsx или csv.
+
+    xlsx умеет несколько листов, csv — только один, поэтому для csv берём
+    первую таблицу: плоский формат для 1С всё равно не вместит три разных
+    среза данных в один файл без потери структуры.
+    """
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    if filepath.endswith('.csv'):
+        # sheets[0] — это кортеж (имя листа, строки), а в csv попадают
+        # только сами строки
+        rows = sheets[0][1]
+        pd.DataFrame(rows[1:], columns=rows[0]).to_csv(
+            filepath, index=False, encoding='utf-8-sig')
+        return filepath
+    with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+        for name, rows in sheets:
+            pd.DataFrame(rows[1:], columns=rows[0]).to_excel(
+                writer, sheet_name=name[:31], index=False)
+    return filepath
+
+
+@main.route('/journal/export')
+@staff_required
+def journal_export():
+    """Выгрузка журнала: Excel с тремя листами или плоский CSV (10.4, 10.5).
+
+    Права те же, что у самого журнала: чужой предмет — 403, иначе файл
+    оказался бы обходным путём мимо ограничения.
+    """
+    group_id = request.args.get('group_id', type=int)
+    subject_id = request.args.get('subject_id', type=int)
+    period_id = request.args.get('period_id', type=int)
+
+    mode = request.args.get('mode', 'dates')
+    if mode not in ('dates', 'subjects'):
+        mode = 'dates'
+
+    fmt = (request.args.get('fmt') or '').strip().lower()
+    if fmt not in ('xlsx', 'csv'):
+        flash_msg('error', 'Неизвестный формат выгрузки')
+        return redirect(url_for('main.journal', group_id=group_id,
+                                subject_id=subject_id, period_id=period_id,
+                                mode=mode))
+
+    # Плоская выгрузка для 1С всегда по датам, даже если на экране открыт
+    # сводный режим: там колонка — предмет, и даты у ячейки просто нет.
+    # Молча отдавать файл без дат хуже, чем проигнорировать переключатель.
+    if fmt == 'csv':
+        mode = 'dates'
+
+    builder = (journal_subject_mode if mode == 'subjects' else journal_context)
+    ctx, failure = builder(group_id, subject_id, period_id, mode)
+    if failure:
+        return failure
+
+    if not ctx['students']:
+        flash_msg('error', 'Нечего выгружать: в группе нет активных студентов')
+        return redirect(url_for('main.journal', group_id=ctx['group'].id,
+                                subject_id=ctx['subject'].id,
+                                period_id=ctx['period'].id, mode=mode))
+
+    if not ctx['columns']:
+        flash_msg('error',
+                  'Нечего выгружать: за период нет ни одного занятия')
+        return redirect(url_for('main.journal', group_id=ctx['group'].id,
+                                subject_id=ctx['subject'].id,
+                                period_id=ctx['period'].id, mode=mode))
+
+    if fmt == 'csv':
+        header, rows = journal_export_csv_rows(ctx)
+        sheets = [(ctx['subject'].name, [header] + rows)]
+    else:
+        grid, summary_rows, absence_rows = journal_export_frames(ctx)
+        sheets = [('Журнал', grid), ('Сводная', summary_rows),
+                  ('Пропуски', absence_rows)]
+
+    filepath = journal_export_filename(ctx, fmt)
+    save_export(os.path.join(EXPORT_DIR, filepath), sheets)
+    log.info('Экспорт журнала %s, %s, %s (%s) — %s', ctx['group'].name,
+             ctx['subject'].name, ctx['period'].name, fmt,
+             current_user.username)
+    return send_file(os.path.join(EXPORT_DIR, filepath), as_attachment=True)
+
+
 @main.route('/journal')
 @staff_required
 def journal():
@@ -1828,6 +2051,12 @@ ATTENDANCE_FIELD_LABELS = {
     'student_id': 'студент', 'group_id': 'группа', 'subject_id': 'предмет',
     'date': 'дата занятия', 'reason': 'причина', 'note': 'комментарий',
     'period_id': 'период', 'mode': 'режим',
+}
+
+RESULT_FIELD_LABELS = {
+    'student_id': 'студент', 'group_id': 'группа', 'subject_id': 'предмет',
+    'period_id': 'период', 'final_value': 'итоговая оценка',
+    'recommended': 'рекомендованный итог', 'justification': 'обоснование',
 }
 
 
@@ -2520,6 +2749,294 @@ def change_password():
             return redirect(request.referrer or home_url())
     return render_template('password_form.html', form=form,
                            title='Смена пароля')
+
+
+# ===================== ИТОГИ, СВОД, ЭКСПОРТ =====================
+def results_context(group_id, period_id):
+    """Данные страницы итогов: свод по группе и рейтинг (10.2, 10.3).
+
+    Собираем всё одним проходом по таблице оценок: отдельный запрос на
+    каждый предмет и на каждого студента превратил бы страницу в десятки
+    SELECT, а считать в шаблоне нельзя — там будет запрос на каждую ячейку.
+    """
+    groups_list = Group.query.order_by(Group.name).all()
+    if not groups_list:
+        return None, (render_template(
+            'error.html', code=404,
+            message='Сначала создайте хотя бы одну группу.'), 404)
+    if group_id not in [g.id for g in groups_list]:
+        group_id = groups_list[0].id
+    group = next(g for g in groups_list if g.id == group_id)
+
+    period, failure = current_period_or_default(period_id)
+    if failure:
+        return None, failure
+    periods_list = (AcademicPeriod.query
+                    .filter_by(academic_year=period.academic_year)
+                    .order_by(AcademicPeriod.sort_order).all())
+
+    students = (Student.query
+                .filter_by(group_id=group.id, status='active')
+                .order_by(Student.last_name, Student.first_name).all())
+
+    # Предметы — те, что стоят в расписании группы: итог по предмету без
+    # пар в группе не имеет смысла
+    subject_ids = [row[0] for row in
+                   (db.session.query(ScheduleItem.subject_id)
+                    .filter_by(group_id=group.id).distinct().all())]
+    subjects = []
+    if subject_ids:
+        subjects = (Subject.query
+                    .filter(Subject.id.in_(subject_ids))
+                    .order_by(Subject.name).all())
+    subject_by_id = {s.id: s for s in subjects}
+    editable = {s.id for s in subjects if current_user.teaches(s)}
+
+    grades = []
+    results = {}
+    attendance = {}
+    if students:
+        grades = (Grade.query
+                  .filter(Grade.student_id.in_([s.id for s in students]),
+                          Grade.period_id == period.id)
+                  .order_by(Grade.subject_id, Grade.date).all())
+        results = {(row.student_id, row.subject_id): row for row in
+                   (PeriodResult.query
+                    .filter(PeriodResult.student_id.in_(
+                        [s.id for s in students]),
+                        PeriodResult.period_id == period.id,
+                        PeriodResult.subject_id.in_(subject_ids or [-1]))
+                    .all())}
+        records = (AttendanceRecord.query
+                   .options(joinedload(AttendanceRecord.subject))
+                   .filter(AttendanceRecord.student_id.in_([s.id for s in students]),
+                           AttendanceRecord.date >= period.start_date,
+                           AttendanceRecord.date <= period.end_date).all())
+        for record in records:
+            # Отметка без предмета — «отсутствовал весь день»: в свод по
+            # предмету она не попадает, иначе одна запись размазывалась бы
+            # по всем предметам дня и портила число пропусков у каждого
+            if record.subject_id is None:
+                continue
+            attendance.setdefault((record.student_id, record.subject_id), []).append(record)
+
+    by_student_subject = {}
+    for grade in grades:
+        by_student_subject.setdefault(
+            (grade.student_id, grade.subject_id), []).append(grade)
+
+    rows = []
+    for student in students:
+        cells = []
+        all_values = []
+        for subject in subjects:
+            subject_grades = by_student_subject.get((student.id, subject.id), [])
+            all_values.extend(subject_grades)
+            result = results.get((student.id, subject.id))
+            cells.append({
+                'subject': subject,
+                'count': len(subject_grades),
+                'average': average_grade(subject_grades),
+                'recommended': recommend_final_grade(subject_grades),
+                'final': result.final_value if result else None,
+                'result': result,
+                'absences': len(attendance.get((student.id, subject.id), [])),
+                'can_edit': subject.id in editable,
+            })
+        stats = grade_quality_stats(all_values)
+        rows.append({
+            'student': student,
+            'cells': cells,
+            'average': average_grade(all_values),
+            'count': stats['count'],
+            'quality': stats['quality'],
+            'progress': stats['progress'],
+            'absences': sum(c['absences'] for c in cells),
+        })
+
+    # Рейтинг: по среднему, при равенстве — по пропускам и по фамилии.
+    # Сортировка по фамилии последней, иначе список «прыгал» бы при пересчёте
+    # средних у нескольких студентов с одинаковым баллом.
+    rating = sorted(rows, key=lambda row: (-row['average'], row['absences'],
+                                           row['student'].last_name))
+    for position, row in enumerate(rating, start=1):
+        row['place'] = position
+
+    return {
+        'groups': groups_list,
+        'group': group,
+        'period': period,
+        'periods': periods_list,
+        'students': students,
+        'subjects': subjects,
+        'subject_by_id': subject_by_id,
+        'rows': rows,
+        'rating': rating,
+        'can_set_results': current_user.is_admin,
+    }, None
+
+
+@main.route('/results')
+@staff_required
+def results():
+    """Свод по группе за период и рейтинг (10.2, 10.3)."""
+    ctx, failure = results_context(request.args.get('group_id', type=int),
+                                   request.args.get('period_id', type=int))
+    if failure:
+        return failure
+
+    form = PeriodResultForm()
+    return render_template('results.html', form=form, **ctx)
+
+
+@main.route('/results/final', methods=['POST'])
+@staff_required
+def results_set_final():
+    """Поставить или снять итоговую оценку (10.1)."""
+    form = PeriodResultForm()
+    if not form.validate_on_submit():
+        flash_form_errors(form, RESULT_FIELD_LABELS)
+        return redirect(url_for('main.results', group_id=request.form.get('group_id'),
+                                period_id=form.period_id.data))
+
+    subject, failure = teacher_owns_subject(form.subject_id.data)
+    if failure:
+        return failure
+
+    student = db.session.get(Student, form.student_id.data)
+    period = db.session.get(AcademicPeriod, form.period_id.data)
+    if student is None or period is None:
+        flash_msg('error', 'Студент или период не найден')
+        return redirect(url_for('main.results'))
+
+    # Итог выставляется только по тому предмету, который реально преподавали
+    # этой группе: иначе в ведомость попадёт оценка по несуществующей паре
+    taught = (db.session.query(ScheduleItem.id)
+              .filter(ScheduleItem.group_id == student.group_id,
+                      ScheduleItem.subject_id == subject.id)
+              .first())
+    if taught is None:
+        flash_msg('error',
+                  f'Предмет «{subject.name}» не входит в расписание группы '
+                  f'{student.group.name if student.group else ""}')
+        log.warning('Отклонён итог: %s не преподаётся группе %s — %s',
+                    subject.name, student.group_id, current_user.username)
+        return redirect(url_for('main.results', group_id=student.group_id,
+                                period_id=period.id))
+
+    result = PeriodResult.query.filter_by(
+        student_id=student.id, subject_id=subject.id,
+        period_id=period.id).first()
+    value = (form.final_value.data or '').strip().lower()
+
+    # Пустое значение означает «снять итог». Проверка обоснования на этом
+    # шаге ещё не применялась, и это правильно: снятие не требует
+    # объяснения, объяснение нужно только чтобы поставить чужую оценку.
+    if not value:
+        if result is not None:
+            db.session.delete(result)
+            db.session.commit()
+            log.info('Итог снят: %s, %s, %s — %s', student.full_name,
+                     subject.name, period.name, current_user.username)
+        flash_msg('success', 'Итоговая оценка снята')
+        return redirect(url_for('main.results', group_id=student.group_id,
+                                period_id=period.id))
+
+    # Рекомендация считается заново на сервере: значение из формы не
+    # доверяем, иначе можно было бы подсунуть «рекомендацию 5» и обойти
+    # требование обоснования
+    grades = (Grade.query
+              .filter(Grade.student_id == student.id,
+                      Grade.subject_id == subject.id,
+                      Grade.period_id == period.id).all())
+    recommended = recommend_final_grade(grades)
+    justification = (form.justification.data or '').strip() or None
+    if value != recommended and not justification:
+        flash_msg('error',
+                  f'Оценка «{value}» отличается от рекомендованной '
+                  f'«{recommended}» — нужно обоснование')
+        return redirect(url_for('main.results', group_id=student.group_id,
+                                period_id=period.id))
+
+    if result is None:
+        result = PeriodResult(student_id=student.id, subject_id=subject.id,
+                              period_id=period.id, created_by=current_user.id)
+        db.session.add(result)
+        is_new = True
+    else:
+        is_new = False
+    result.final_value = value
+    result.justification = justification
+    db.session.commit()
+
+    note = f' (рекомендация была «{recommended}»)' if value != recommended else ''
+    log.info('Итог %s: %s, %s, %s%s — %s', 'поставлен' if is_new else 'изменён',
+             student.full_name, subject.name, value, note, current_user.username)
+    flash_msg('success',
+              f'{student.full_name}, {subject.name}: итог {value}{note}')
+    return redirect(url_for('main.results', group_id=student.group_id,
+                            period_id=period.id))
+
+
+@main.route('/results/export')
+@staff_required
+def results_export():
+    """Выгрузка свода по группе в Excel или CSV."""
+    fmt = (request.args.get('fmt') or 'xlsx').strip().lower()
+    if fmt not in ('xlsx', 'csv'):
+        fmt = 'xlsx'
+
+    ctx, failure = results_context(request.args.get('group_id', type=int),
+                                   request.args.get('period_id', type=int))
+    if failure:
+        return failure
+    if not ctx['rows']:
+        flash_msg('error', 'Нечего выгружать: в группе нет активных студентов')
+        return redirect(url_for('main.results', group_id=ctx['group'].id,
+                                period_id=ctx['period'].id))
+
+    # Плоский формат: одна строка — пара «студент + предмет». Такой файл
+    # годится и для 1С, и для обычной таблицы, где свод читают глазами.
+    header = ['Студент', 'Номер зачетки', 'Группа', 'Предмет', 'Оценок',
+              'Средний', 'Рекомендованный итог', 'Итог', 'Пропуски']
+    data = []
+    for row in ctx['rows']:
+        for cell in row['cells']:
+            data.append([
+                row['student'].full_name,
+                row['student'].student_id,
+                ctx['group'].name,
+                cell['subject'].name,
+                cell['count'],
+                cell['average'] or '',
+                cell['recommended'],
+                cell['final'] or '',
+                cell['absences'],
+            ])
+
+    # Рейтинг — вторым листом: в своде по предметам его нет, а сравнивать
+    # студентов между собой обычно именно для этого.
+    rating_header = ['Место', 'Студент', 'Номер зачетки', 'Средний', 'Оценок',
+                     'Пропуски', 'Качество, %', 'Успеваемость, %']
+    rating_data = [[row['place'], row['student'].full_name,
+                    row['student'].student_id, row['average'] or '',
+                    row['count'], row['absences'], row['quality'],
+                    row['progress']] for row in ctx['rating']]
+
+    prefix = f'свод_{ctx["group"].name}_{ctx["period"].name}'
+    sheets = [(ctx['group'].name, [header] + data)]
+    if fmt == 'xlsx':
+        sheets.append(('Рейтинг', [rating_header] + rating_data))
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    safe = sanitize_filename(prefix)
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    filepath = os.path.join(EXPORT_DIR, f'{safe}_{timestamp}.{fmt}')
+    save_export(filepath, sheets)
+
+    log.info('Экспорт свода %s, %s (%s) — %s', ctx['group'].name,
+             ctx['period'].name, fmt, current_user.username)
+    return send_file(filepath, as_attachment=True)
 
 
 # ===================== ОТЧЕТЫ =====================

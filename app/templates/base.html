@@ -117,7 +117,7 @@
             <!-- Основной контент -->
             <div class="col-md-10 col-lg-10 p-0 main-content">
                 <!-- Верхняя панель -->
-                <nav class="navbar navbar-light bg-white border-bottom px-4 py-3">
+                <nav class="navbar navbar-light bg-white border-bottom px-4 py-3 no-print">
                     <div class="container-fluid">
                         <span class="navbar-text">
                             <i class="bi bi-calendar-date me-2"></i>
@@ -168,7 +168,7 @@
                 </nav>
                 
                 <!-- Хлебные крошки -->
-                <nav class="px-4 pt-3" aria-label="breadcrumb">
+                <nav class="px-4 pt-3 no-print" aria-label="breadcrumb">
                     <ol class="breadcrumb mb-0">
                         <li class="breadcrumb-item"><a href="{{ home_url() }}">Главная</a></li>
                         {% block breadcrumb %}{% endblock %}
@@ -185,7 +185,7 @@
                             {% block page_subtitle %}{% endblock %}
                         </p>
                     </div>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex gap-2 no-print">
                         {% block header_actions %}{% endblock %}
                     </div>
                 </div>
@@ -207,7 +207,7 @@
                 </div>
                 
                 <!-- Футер -->
-                <footer class="mt-auto border-top py-3 px-4 bg-white">
+                <footer class="mt-auto border-top py-3 px-4 bg-white no-print">
                     <div class="d-flex justify-content-between align-items-center">
                         <small class="text-muted">
                             © 2024 Админ-панель Колледжа. Версия 1.0

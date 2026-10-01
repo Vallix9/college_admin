@@ -21,6 +21,21 @@
 {% endblock %}
 
 {% block header_actions %}
+<a href="{{ url_for('main.results', group_id=group.id, period_id=period.id) }}"
+   class="btn btn-outline-primary">
+    <i class="bi bi-clipboard-data"></i> Итоги и свод
+</a>
+<a href="{{ url_for('main.journal_export', group_id=group.id, subject_id=subject.id, period_id=period.id, mode=mode, fmt='xlsx') }}"
+   class="btn btn-outline-success">
+    <i class="bi bi-file-earmark-excel"></i> Excel
+</a>
+<a href="{{ url_for('main.journal_export', group_id=group.id, subject_id=subject.id, period_id=period.id, mode=mode, fmt='csv') }}"
+   class="btn btn-outline-success">
+    <i class="bi bi-filetype-csv"></i> CSV
+</a>
+<button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+    <i class="bi bi-printer"></i> Печать
+</button>
 {% if current_user.is_admin %}
 <a href="{{ url_for('main.schedule', group_id=group.id) }}"
    class="btn btn-outline-primary">

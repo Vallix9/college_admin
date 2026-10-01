@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Итоги и свод{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/journal.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Итоги и свод</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-clipboard-data"></i>Итоги и свод
+{% endblock %}
+
+{% block page_subtitle %}
+{{ group.name }} · {{ period.name }}
+({{ period.start_date.strftime('%d.%m.%Y') }} — {{ period.end_date.strftime('%d.%m.%Y') }})
+{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('main.journal', group_id=group.id, period_id=period.id) }}"
+   class="btn btn-outline-secondary">
+    <i class="bi bi-journal-richtext"></i> Журнал
+</a>
+<a href="{{ url_for('main.results_export', group_id=group.id, period_id=period.id, fmt='xlsx') }}"
+   class="btn btn-outline-primary">
+    <i class="bi bi-file-earmark-excel"></i> Excel
+</a>
+<a href="{{ url_for('main.results_export', group_id=group.id, period_id=period.id, fmt='csv') }}"
+   class="btn btn-outline-primary">
+    <i class="bi bi-filetype-csv"></i> CSV
+</a>
+<button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+    <i class="bi bi-printer"></i> Печать
+</button>
+{% endblock %}
+
+{% block content %}
+<form method="GET" action="{{ url_for('main.results') }}" class="card mb-3 no-print">
+    <div class="card-body py-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label mb-1" for="group_id">Группа</label>
+                <select name="group_id" id="group_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for g in groups %}
+                    <option value="{{ g.id }}" {% if g.id == group.id %}selected{% endif %}>
+                        {{ g.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label mb-1" for="period_id">Период</label>
+                <select name="period_id" id="period_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for p in periods %}
+                    <option value="{{ p.id }}" {% if p.id == period.id %}selected{% endif %}>
+                        {{ p.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+</form>
+
+{% if not subjects %}
+<div class="card">
+    <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-calendar-x display-4 d-block mb-3"></i>
+        <p class="mb-2">В расписании группы {{ group.name }} нет предметов.</p>
+        <p class="mb-0">Добавьте предметы в
+            <a href="{{ url_for('main.schedule', group_id=group.id) }}">расписание</a> —
+            без них свод и итоги считать не по чему.</p>
+    </div>
+</div>
+{% else %}
+
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="text-muted small">
+            Свод за период: средний балл, итоговая оценка и пропуски по каждому предмету.
+            Нажмите на итог, чтобы поставить или снять его.
+        </span>
+        <span class="badge bg-light text-dark">
+            {{ rows|length }} студ. · {{ subjects|length }} предм.
+        </span>
+    </div>
+    <div class="table-responsive journal-scroll">
+        <table class="table table-bordered table-sm journal-grid mb-0">
+            <thead>
+                <tr>
+                    <th class="journal-sticky student-col">Студент</th>
+                    {% for subject in subjects %}
+                    <th class="text-center column-head column-subject">{{ subject.name }}</th>
+                    {% endfor %}
+                    <th class="text-center total-col">Итого</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td class="journal-sticky student-col">
+                        <a href="{{ url_for('main.view_student', student_id=row.student.id) }}"
+                           class="text-decoration-none">{{ row.student.last_name }} {{ row.student.first_name }}</a>
+                    </td>
+                    {% for cell in row.cells %}
+                    <td class="journal-cell text-center result-cell">
+                        <div class="small text-muted">
+                            {% if cell.count %}{{ cell.average }}{% else %}—{% endif %}
+                        </div>
+                        <div>
+                            {% if cell.final %}
+                            <span class="badge grade-badge result-badge">{{ cell.final }}</span>
+                            {% else %}
+                            <span class="text-muted small">—</span>
+                            {% endif %}
+                        </div>
+                        <div class="small">
+                            {% if cell.recommended %}
+                            <span class="text-muted" title="Рекомендация по среднему">{{ cell.recommended }}</span>
+                            {% endif %}
+                            {% if cell.absences %}
+                            <span class="text-danger" title="Пропусков">{{ cell.absences }} пр.</span>
+                            {% endif %}
+                        </div>
+                        {% if cell.can_edit %}
+                        <button type="button" class="result-edit"
+                                title="Поставить или снять итоговую оценку"
+                                data-role="result-edit"
+                                data-student="{{ row.student.id }}"
+                                data-student-name="{{ row.student.full_name }}"
+                                data-subject="{{ cell.subject.id }}"
+                                data-subject-name="{{ cell.subject.name }}"
+                                data-period="{{ period.id }}"
+                                data-group="{{ group.id }}"
+                                data-average="{{ cell.average }}"
+                                data-count="{{ cell.count }}"
+                                data-recommended="{{ cell.recommended }}"
+                                data-final="{{ cell.final or '' }}"
+                                data-justification="{{ cell.result.justification if cell.result else '' }}">
+                            <i class="bi bi-pencil-square"></i>
+                        </button>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="text-center total-col">
+                        <strong>{{ row.average or '—' }}</strong>
+                        <div class="small text-muted">{{ row.count }} оц.</div>
+                        <div class="small text-muted">
+                            кач. {{ row.quality }}% · усп. {{ row.progress }}%
+                        </div>
+                        {% if row.absences %}
+                        <div class="small text-danger">{{ row.absences }} пр.</div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if not can_set_results %}
+    <div class="card-footer bg-warning-subtle text-muted small">
+        <i class="bi bi-eye"></i> Итог по своим предметам вы можете изменить,
+        по остальным — только просмотр. Итог, отличный от среднего балла,
+        требует обоснования.
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-trophy"></i> Рейтинг группы
+        <span class="text-muted small ms-2">
+            по среднему баллу; при равенстве — по числу пропусков
+        </span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th class="text-center" style="width: 60px;">Место</th>
+                    <th>Студент</th>
+                    <th class="text-center">Средний</th>
+                    <th class="text-center">Оценок</th>
+                    <th class="text-center">Пропуски</th>
+                    <th class="text-center">Качество</th>
+                    <th class="text-center">Успеваемость</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rating %}
+                <tr>
+                    <td class="text-center">
+                        {% if row.place == 1 %}
+                        <span class="badge bg-warning text-dark">{{ row.place }}</span>
+                        {% elif row.place == 2 %}
+                        <span class="badge bg-secondary">{{ row.place }}</span>
+                        {% elif row.place == 3 %}
+                        <span class="badge bg-danger">{{ row.place }}</span>
+                        {% else %}
+                        <span class="text-muted">{{ row.place }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('main.view_student', student_id=row.student.id) }}"
+                           class="text-decoration-none">{{ row.student.full_name }}</a>
+                    </td>
+                    <td class="text-center"><strong>{{ row.average or '—' }}</strong></td>
+                    <td class="text-center">{{ row.count }}</td>
+                    <td class="text-center {% if row.absences %}text-danger{% else %}text-muted{% endif %}">
+                        {{ row.absences or '—' }}
+                    </td>
+                    <td class="text-center">{{ row.quality }}%</td>
+                    <td class="text-center">{{ row.progress }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer bg-body text-muted small">
+        <i class="bi bi-info-circle"></i>
+        Качество — доля оценок 4 и 5, успеваемость — доля оценок 3, 4 и 5.
+        Зачёт равен 5, незачёт — 2.
+    </div>
+</div>
+
+<div class="modal fade" id="resultModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="POST" action="{{ url_for('main.results_set_final') }}">
+            {{ form.hidden_tag() }}
+            <div class="modal-header">
+                <h5 class="modal-title">Итоговая оценка</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2">
+                    <strong id="result_student_name"></strong><br>
+                    <span class="text-muted" id="result_subject_name"></span>
+                </p>
+                <p class="small text-muted mb-3" id="result_average"></p>
+                <div class="mb-3">
+                    <label class="form-label" for="result_value">{{ form.final_value.label.text }}</label>
+                    {{ form.final_value(class='form-select', id='result_value') }}
+                    {% for error in form.final_value.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="result_justification">
+                        Обоснование
+                        <span class="text-muted small">(если итог отличается от рекомендованного)</span>
+                    </label>
+                    {{ form.justification(class='form-control', id='result_justification', rows=3) }}
+                    {% for error in form.justification.errors %}
+                    <div class="invalid-feedback d-block">{{ error }}</div>
+                    {% endfor %}
+                </div>
+                <div class="alert alert-warning py-2 small mb-0 d-none" id="result_warning">
+                    Оценка отличается от рекомендованной — обоснование обязательно.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-danger me-auto d-none" id="result_clear">
+                    <i class="bi bi-x-circle"></i> Снять итог
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Отмена</button>
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/results.js') }}"></script>
+{% endblock %}

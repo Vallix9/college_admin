@@ -26,7 +26,7 @@ with app.app_context():
 
 PAGES = ['/', '/students', '/groups', '/subjects', '/grades', '/reports', '/settings',
          '/periods', '/schedule', '/journal',
-         '/journal?mode=subjects', '/attendance']
+         '/journal?mode=subjects', '/attendance', '/results']
 
 with app.test_client() as client:
     html = client.get('/login').get_data(as_text=True)

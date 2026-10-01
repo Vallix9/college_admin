@@ -50,6 +50,8 @@ INDEXES = [
     ('ix_grade_history_grade', 'grade_history', '(grade_id)'),
     # Журнал выбирает рабочие даты одним запросом и сортирует их
     ('ix_lesson_date_date', 'lesson_date', '(date)'),
+    # Свод по группе читает итоги за период одним запросом
+    ('ix_period_result_period', 'period_result', '(period_id, subject_id)'),
 ]
 
 UNIQUE_INDEXES = [
@@ -60,6 +62,9 @@ UNIQUE_INDEXES = [
     ('uq_period_year_order', 'academic_period', '(academic_year, sort_order)'),
     # Одно и то же занятие за одну дату отмечается только раз
     ('uq_lesson_date', 'lesson_date', '(schedule_item_id, date)'),
+    # Итог за период у пары «студент + предмет» один
+    ('uq_period_result', 'period_result',
+     '(student_id, subject_id, period_id)'),
 ]
 
 

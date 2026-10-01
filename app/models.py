@@ -539,3 +539,63 @@ class GradeHistory(db.Model):
 
     def __repr__(self):
         return f'<GradeHistory grade={self.grade_id} {self.action}>'
+
+
+class PeriodResult(db.Model):
+    """Итоговая оценка за период: пара «студент + предмет + период».
+
+    Средний балл сам по себе итогом не является: его округляют по правилам
+    учебного заведения, а преподаватель вправе поставить оценку вручную и
+    объяснить почему. Поэтому здесь хранится именно то, что попадёт в
+    ведомость, а рекомендация по среднему считается на лету из таблицы grade
+    и служит подсказкой, а не заменой решения преподавателя.
+
+    Обоснование обязательно, когда итог отличается от рекомендации: молча
+    поставить «5» при среднем 3,4 нельзя, это спрячет ошибку в расчёте или
+    в самой ведомости.
+    """
+
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('student.id'),
+                           nullable=False)
+    subject_id = db.Column(db.Integer, db.ForeignKey('subject.id'),
+                           nullable=False)
+    period_id = db.Column(db.Integer, db.ForeignKey('academic_period.id'),
+                          nullable=False)
+    final_value = db.Column(db.String(20), nullable=False)
+    # Обоснование ручной правки: почему итог отличается от рекомендации
+    justification = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=now)
+    updated_at = db.Column(db.DateTime, default=now, onupdate=now)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+
+    __table_args__ = (
+        db.UniqueConstraint('student_id', 'subject_id', 'period_id',
+                            name='uq_period_result'),
+        db.Index('ix_period_result_period', 'period_id', 'subject_id'),
+    )
+
+    student = db.relationship('Student', backref=db.backref(
+        'period_results', lazy=True, cascade='all, delete-orphan'))
+    subject = db.relationship('Subject',
+                              backref=db.backref('period_results', lazy=True))
+    period = db.relationship('AcademicPeriod',
+                             backref=db.backref('period_results', lazy=True))
+    author = db.relationship('User', foreign_keys=[created_by], lazy=True)
+
+    @property
+    def color(self):
+        """Класс Bootstrap для цвета итога — тот же набор, что у Grade."""
+        value = str(self.final_value)
+        if value in ('5', 'зачет'):
+            return 'bg-success'
+        if value == '4':
+            return 'bg-primary'
+        if value == '3':
+            return 'bg-warning'
+        return 'bg-danger'
+
+    def __repr__(self):
+        return (f'<PeriodResult student={self.student_id} '
+                f'subject={self.subject_id} period={self.period_id} '
+                f'{self.final_value}>')

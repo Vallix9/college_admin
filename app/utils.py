@@ -521,6 +521,65 @@ def journal_totals(cells_by_student):
     return totals
 
 
+# Пороги рекомендации итоговой оценки. Правило округления среднего балла
+# задаётся учебным заведением, и «правильного» варианта здесь нет —
+# важно, чтобы оно было записано в одном месте и не менялось по дороге.
+# По умолчанию: 4,5 → «5», 3,75 → «4», 2,5 → «3», ниже → «2».
+FINAL_GRADE_THRESHOLDS = ((4.5, '5'), (3.75, '4'), (2.5, '3'))
+
+
+def recommend_final_grade(grades):
+    """Рекомендованная итоговая оценка по списку оценок.
+
+    Возвращает '' , если оценок нет: без оценок итог не рекомендуется, иначе
+    показатель «3» у студента, которому ещё ничего не поставили, выглядел бы
+    как недопуск.
+
+    Если все оценки — зачёт/незачёт, рекомендуется та же шкала, а не числа:
+    студент, у которого три зачёта, должен получить «зачёт», а не «5».
+    """
+    values = [str(getattr(item, 'grade_value', item) or '').strip().lower()
+              for item in grades or ()]
+    values = [value for value in values if value]
+    if not values:
+        return ''
+
+    if all(value in NON_NUMERIC_GRADES for value in values):
+        # В этой шкале больше низкой оценки нет: любой незачёт — это «незачёт»
+        return 'незачет' if 'незачет' in values else 'зачет'
+
+    average = average_grade(values)
+    if not average:
+        return ''
+    for threshold, value in FINAL_GRADE_THRESHOLDS:
+        if average >= threshold:
+            return value
+    return '2'
+
+
+def grade_quality_stats(grades):
+    """Качество и успеваемость по списку оценок.
+
+    Проценты считаются по принятой в РФ терминологии:
+      * качество — доля оценок 4 и 5 (знания усвоены);
+      * успеваемость — доля оценок 3, 4 и 5 (студент не отстаёт).
+    Двойка портит успеваемость, но не качество.
+    """
+    points = [grade_to_points(getattr(item, 'grade_value', item))
+              for item in grades or ()]
+    points = [value for value in points if value is not None]
+    total = len(points)
+    if not total:
+        return {'count': 0, 'quality': 0, 'progress': 0}
+    quality = sum(1 for value in points if value >= 4)
+    progress = sum(1 for value in points if value >= 3)
+    return {
+        'count': total,
+        'quality': round(quality / total * 100, 1),
+        'progress': round(progress / total * 100, 1),
+    }
+
+
 def teacher_choices():
     """Список сотрудников, которым можно назначить предмет.
 

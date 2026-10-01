@@ -392,6 +392,48 @@ class AttendanceEditForm(FlaskForm):
     note = TextAreaField('Комментарий', validators=[Optional(), Length(max=300)])
 
 
+class PeriodResultForm(FlaskForm):
+    """Итоговая оценка за период (10.1).
+
+    Пустое значение — это не ошибка, а команда «снять итог», поэтому
+    final_value не обязателен: иначе снятие было бы недостижимо, потому что
+    проверка формы срабатывала бы раньше, чем маршрут успеет разобрать
+    запрос.
+
+    Рекомендация по среднему приходит с сервера скрытым полем, но маршрут
+    пересчитывает её заново: значение из формы не доверяем. Обоснование
+    обязательно, когда итог отличается от рекомендации, иначе в ведомость
+    попадёт «5» при среднем 3,4 без объяснения.
+    """
+    student_id = HiddenField(validators=[InputRequired()], filters=[to_int])
+    subject_id = HiddenField(validators=[InputRequired()], filters=[to_int])
+    period_id = HiddenField(validators=[InputRequired()], filters=[to_int])
+    group_id = HiddenField(filters=[to_int])
+    final_value = SelectField('Итоговая оценка', coerce=str)
+    recommended = HiddenField()
+    justification = TextAreaField('Обоснование', validators=[Optional(),
+                                                             Length(max=1000)])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Пустой вариант нужен для снятия итога, а не только для удобства
+        self.final_value.choices = [('', '— снять итог —')] + [
+            (value, value) for value in ('5', '4', '3', '2',
+                                         'зачет', 'незачет')]
+
+    def validate_final_value(self, field):
+        value = (field.data or '').strip().lower()
+        if not value:
+            return
+        if value not in dict(self.final_value.choices):
+            raise ValidationError('Недопустимая итоговая оценка')
+        if value != (self.recommended.data or '').strip().lower() and \
+                not (self.justification.data or '').strip():
+            raise ValidationError(
+                f'Оценка отличается от рекомендованной '
+                f'«{self.recommended.data or "—"}» — укажите обоснование')
+
+
 class StaffForm(FlaskForm):
     """Создание и правка учётной записи сотрудника."""
     username = StringField('Логин*', validators=[DataRequired(), Length(min=3, max=64)])

@@ -119,3 +119,114 @@
     color: var(--bs-danger) !important;
     filter: brightness(1.15);
 }
+
+/* --- Итоговые оценки и свод (10.1—10.3) --- */
+
+.result-cell {
+    white-space: nowrap;
+}
+
+.result-badge {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--bs-dark);
+    background: var(--bs-body-bg);
+    border: 1px solid var(--bs-border);
+}
+
+.result-cell .text-danger {
+    font-size: 0.75rem;
+}
+
+/* Карандаш итога виден только при наведении: в таблице 8 предметов × 24
+   студента постоянные кнопки превращают её в кашу из иконок. */
+.result-edit {
+    border: 0;
+    background: transparent;
+    color: var(--bs-secondary);
+    padding: 0 2px;
+    font-size: 0.75rem;
+    line-height: 1;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.1s ease-in-out;
+}
+
+.result-cell:hover .result-edit,
+.result-edit:focus {
+    opacity: 1;
+}
+
+.result-edit:hover {
+    color: var(--bs-primary);
+}
+
+/* --- Печать (10.6) ---
+   На бумаге не нужны ни меню, ни кнопки, ни фильтры: остаются только
+   заголовок с группой и периодом и сама таблица. Скрываемое помечено
+   классом no-print в base.html, а не вычисляется по структуре вёрстки. */
+@media print {
+    .no-print,
+    .sidebar,
+    .alert,
+    .modal,
+    .form-select,
+    .absence-add,
+    .result-edit {
+        display: none !important;
+    }
+
+    .main-content {
+        width: 100% !important;
+        flex: 0 0 100% !important;
+        max-width: 100% !important;
+    }
+
+    .card {
+        border: 1px solid #000;
+        box-shadow: none;
+        page-break-inside: avoid;
+    }
+
+    .journal-scroll {
+        overflow: visible !important;
+        max-height: none !important;
+    }
+
+    /* Липкий столбец со студентом мешал бы при печати: без горизонтальной
+       прокрутки он и так стоит в начале строки. */
+    .journal-sticky {
+        position: static !important;
+    }
+
+    .journal-grid,
+    .table {
+        font-size: 9pt;
+    }
+
+    .journal-grid th,
+    .journal-grid td {
+        padding: 2px 4px !important;
+    }
+
+    /* На бумаге цвет не передаёт смысл, поэтому рамка должна остаться
+       единственным носителем различия. */
+    .result-badge,
+    .grade-badge {
+        border: 1px solid #000;
+        color: #000 !important;
+        background: #fff !important;
+    }
+
+    thead {
+        display: table-header-group;
+    }
+
+    tr {
+        page-break-inside: avoid;
+    }
+
+    @page {
+        margin: 12mm;
+    }
+}
