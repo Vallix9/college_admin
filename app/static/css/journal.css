@@ -85,3 +85,37 @@
 .grade-badge:hover {
     filter: brightness(0.92);
 }
+
+/* Кнопка отметки пропуска намеренно почти невидима: в сетке важны оценки,
+   а пропуск отмечают реже. Появляется при наведении на ячейку и при фокусе,
+   чтобы с клавиатуры её тоже можно было нажать. */
+.absence-add {
+    border: 0;
+    background: transparent;
+    color: var(--bs-secondary);
+    padding: 0 2px;
+    font-size: 0.75rem;
+    line-height: 1;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.1s ease-in-out;
+}
+
+.journal-cell:hover .absence-add,
+.journal-cell:focus-within .absence-add,
+.absence-add:focus {
+    opacity: 1;
+}
+
+.absence-add:hover {
+    color: var(--bs-danger);
+}
+
+.absence-mark {
+    cursor: pointer;
+}
+
+.absence-mark:hover {
+    color: var(--bs-danger) !important;
+    filter: brightness(1.15);
+}

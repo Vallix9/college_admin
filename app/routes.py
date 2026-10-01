@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from datetime import datetime, date
-from sqlalchemy import or_, func, desc
+from sqlalchemy import or_, func, desc, case
 from functools import wraps
 import os
 from app.init_ import db
@@ -16,6 +16,9 @@ from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountP
 from app.forms import PeriodForm, PeriodGenerateForm, ScheduleItemForm, DeleteTokenForm
 from app.forms import ScheduleDayForm, LessonDateForm
 from app.forms import JournalGradeForm, JournalEditForm
+from app.forms import (AttendanceMarkForm, AttendanceBulkForm,
+                       AttendanceEditForm, attendance_reason_choices,
+                       ALL_DAY_SUBJECT, ALL_DAY_LABEL)
 from app.utils import build_periods, parse_academic_year, teacher_choices
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
@@ -279,11 +282,12 @@ def dashboard():
         recent_grades = (Grade.query
                          .options(joinedload(Grade.student), joinedload(Grade.subject))
                          .order_by(desc(Grade.created_at)).limit(10).all())
-        
-        return render_template('dashboard.html', 
-                             stats=stats, 
-                             recent_students=recent_students, 
+
+        return render_template('dashboard.html',
+                             stats=stats,
+                             recent_students=recent_students,
                              recent_grades=recent_grades,
+                             attendance_stats=dashboard_attendance_stats(),
                              settings=settings)
     except Exception as e:
         flash_msg('error', f'Ошибка загрузки дашборда: {str(e)}')
@@ -462,13 +466,37 @@ def view_student(student_id):
     
     # Текущая дата для шаблона
     today = date.today()
-    
+
+    # Пропуски за текущий период: сводка и список одним проходом по записям
+    reasons = attendance_reason_choices()
+    attendance_period, failure = current_period_or_default()
+    attendance_records = []
+    attendance_summary = {'total': 0, 'hours': 0,
+                          'reasons': {reason: 0 for reason, _ in reasons}}
+    if attendance_period is not None:
+        attendance_records = (AttendanceRecord.query
+                              .options(joinedload(AttendanceRecord.subject),
+                                       joinedload(AttendanceRecord.author))
+                              .filter(AttendanceRecord.student_id == student_id,
+                                      AttendanceRecord.date >= attendance_period.start_date,
+                                      AttendanceRecord.date <= attendance_period.end_date)
+                              .order_by(AttendanceRecord.date.desc()).all())
+    for record in attendance_records:
+        attendance_summary['total'] += 1
+        attendance_summary['hours'] += record.hours_count or 0
+        if record.reason in attendance_summary['reasons']:
+            attendance_summary['reasons'][record.reason] += 1
+
     return render_template('student_detail.html',
                          student=student,
                          grades_by_subject=grades_by_subject,
                          all_subjects=all_subjects,
                          grade_form=grade_form,
                          subject_form=subject_form,
+                         attendance_period=attendance_period,
+                         attendance_records=attendance_records,
+                         attendance_summary=attendance_summary,
+                         attendance_reasons=reasons,
                          today=today)
 
 # ===================== ДОБАВЛЕНИЕ И УДАЛЕНИЕ ОЦЕНОК СТУДЕНТА =====================
@@ -1541,8 +1569,16 @@ def journal():
                             LessonDate.date <= date.today())
                     .order_by(LessonDate.date).all())]
 
+    absence_form = AttendanceMarkForm()
+    absence_form.subject_id.choices = [(ctx['subject'].id, ctx['subject'].name)]
+    absence_form.reason.choices = attendance_reason_choices()
+    absence_edit_form = AttendanceEditForm()
+    absence_edit_form.reason.choices = attendance_reason_choices()
+
     return render_template('journal.html', grade_form=grade_form,
-                           edit_form=JournalEditForm(), **ctx)
+                           edit_form=JournalEditForm(),
+                           absence_form=absence_form,
+                           absence_edit_form=absence_edit_form, **ctx)
 
 
 @main.route('/journal/grade/add', methods=['POST'])
@@ -1556,8 +1592,7 @@ def journal_add_grade():
     form.subject_id.choices = [(s.id, s.name)
                                for s in visible_subjects_query().all()]
     if not form.validate_on_submit():
-        for field, errors in form.errors.items():
-            flash_msg('error', f'{field}: {"; ".join(errors)}')
+        flash_form_errors(form)
         return _journal_back(request.form)
 
     subject, failure = teacher_owns_subject(form.subject_id.data)
@@ -1627,8 +1662,7 @@ def journal_edit_grade(grade_id):
     if failure:
         return failure
     if not form.validate_on_submit():
-        for field, errors in form.errors.items():
-            flash_msg('error', f'{field}: {"; ".join(errors)}')
+        flash_form_errors(form)
         return _journal_back(request.form)
 
     old_value = grade.grade_value
@@ -1771,6 +1805,466 @@ def _journal_back(form):
     if form.get('mode') in ('dates', 'subjects'):
         args['mode'] = form.get('mode')
     return redirect(url_for('main.journal', **args))
+
+
+# ===================== ПРОПУСКИ =====================
+def _attendance_back(form, fallback='main.attendance'):
+    """Возврат на страницу пропусков или в сетку журнала.
+
+    Отметка ставится из двух мест: из ячейки журнала и со страницы пропусков.
+    Возвращать туда, откуда пришли, удобнее всего по полю mode.
+    """
+    if form.get('mode') in ('dates', 'subjects'):
+        return _journal_back(form)
+    args = {}
+    for key in ('group_id', 'period_id', 'subject_id'):
+        value = form.get(key, type=int)
+        if value:
+            args[key] = value
+    return redirect(url_for(fallback, **args))
+
+
+ATTENDANCE_FIELD_LABELS = {
+    'student_id': 'студент', 'group_id': 'группа', 'subject_id': 'предмет',
+    'date': 'дата занятия', 'reason': 'причина', 'note': 'комментарий',
+    'period_id': 'период', 'mode': 'режим',
+}
+
+
+def flash_form_errors(form, labels=ATTENDANCE_FIELD_LABELS):
+    """Показать ошибки формы по-русски.
+
+    Без подписей пользователю выводилось «subject_id: Not a valid choice» —
+    имя поля и текст WTForms о нём ничего не говорят.
+    """
+    for field, errors in form.errors.items():
+        label = labels.get(field, field)
+        flash_msg('error', f'{label}: {"; ".join(errors)}')
+
+
+def attendance_subject_choices():
+    """Предметы для форм пропусков.
+
+    Администратору добавляем «весь день»: такая отметка честнее, чем ставить
+    одинаковые пропуски по каждому предмету дня вручную. Преподавателю
+    вариант не показываем — он затронул бы чужие предметы.
+    """
+    choices = [(s.id, s.name) for s in visible_subjects_query().all()]
+    if current_user.is_admin:
+        choices.insert(0, (ALL_DAY_SUBJECT, ALL_DAY_LABEL))
+    return choices
+
+
+def mark_attendance_allowed(subject_id):
+    """Кто имеет право ставить пропуск по предмету.
+
+    Преподаватель отмечает пропуск только по своему предмету. Отметка без
+    предмета («отсутствовал весь день») задевает все пары дня, включая чужие
+    предметы, поэтому доступна только администратору.
+
+    Возвращает (subject|None, error_response|None).
+    """
+    if not subject_id:
+        if not current_user.is_admin:
+            log.warning('Доступ запрещён: %s (роль %s) хочет отметить пропуск '
+                        'за весь день', current_user.username, current_user.role)
+            return None, (render_template(
+                'error.html', code=403,
+                message='Отметку «отсутствовал весь день» может поставить только '
+                        'администратор. Преподаватель отмечает пропуск по своему '
+                        'предмету.'), 403)
+        return None, None
+    return teacher_owns_subject(subject_id)
+
+
+def attendance_context(group_id, period_id):
+    """Общие данные для журнала пропусков: фильтры, список, сводка.
+
+    Сводка по группе и по студентам берётся одним проходом по записям
+    (get_or_0), а не агрегатами на каждую причину: пять отдельных
+    COUNT-запросов на группу расточительны и всё равно требуют второго
+    прохода для списка.
+    """
+    groups_list = Group.query.order_by(Group.name).all()
+    if not groups_list:
+        return None, (render_template(
+            'error.html', code=404,
+            message='Сначала создайте хотя бы одну группу.'), 404)
+    if group_id not in [g.id for g in groups_list]:
+        group_id = groups_list[0].id
+    group = next(g for g in groups_list if g.id == group_id)
+
+    period, failure = current_period_or_default(period_id)
+    if failure:
+        return None, failure
+
+    periods_list = (AcademicPeriod.query
+                    .filter_by(academic_year=period.academic_year)
+                    .order_by(AcademicPeriod.sort_order).all())
+
+    students = (Student.query
+                .filter_by(group_id=group.id, status='active')
+                .order_by(Student.last_name, Student.first_name).all())
+    reasons = attendance_reason_choices()
+
+    records = []
+    per_student = {s.id: {'total': 0, 'hours': 0,
+                          'reasons': {reason: 0 for reason, _ in reasons}}
+                   for s in students}
+    if students:
+        # Список отметок показывает студента, предмет и автора, поэтому
+        # связи грузим сразу: иначе на каждую отметку по отдельному SELECT
+        records = (AttendanceRecord.query
+                   .options(joinedload(AttendanceRecord.student),
+                            joinedload(AttendanceRecord.subject),
+                            joinedload(AttendanceRecord.author))
+                   .filter(AttendanceRecord.student_id.in_(
+                       [s.id for s in students]),
+                       AttendanceRecord.date >= period.start_date,
+                       AttendanceRecord.date <= period.end_date)
+                   .order_by(AttendanceRecord.date.desc(),
+                             AttendanceRecord.student_id).all())
+
+    for record in records:
+        # hours_count считает пары по расписанию, поэтому суммируем по
+        # студенту то, что он реально пропустил, а не число записей
+        bucket = per_student.get(record.student_id)
+        if bucket is None:
+            continue
+        bucket['total'] += 1
+        bucket['hours'] += record.hours_count or 0
+        if record.reason in bucket['reasons']:
+            bucket['reasons'][record.reason] += 1
+
+    summary = {
+        'total': sum(b['total'] for b in per_student.values()),
+        'hours': sum(b['hours'] for b in per_student.values()),
+        'reasons': {reason: sum(b['reasons'][reason]
+                                for b in per_student.values())
+                    for reason, _ in reasons},
+    }
+
+    return {
+        'groups': groups_list,
+        'group': group,
+        'period': period,
+        'periods': periods_list,
+        'students': students,
+        'reasons': reasons,
+        'records': records,
+        'per_student': per_student,
+        'summary': summary,
+        'can_mark_any': current_user.is_admin,
+    }, None
+
+
+@main.route('/attendance')
+@staff_required
+def attendance():
+    """Журнал пропусков по группе за период: список и сводка (9.1)."""
+    group_id = request.args.get('group_id', type=int)
+    period_id = request.args.get('period_id', type=int)
+    ctx, failure = attendance_context(group_id, period_id)
+    if failure:
+        return failure
+
+    mark_form = AttendanceMarkForm()
+    mark_form.subject_id.choices = attendance_subject_choices()
+    mark_form.reason.choices = ctx['reasons']
+    bulk_form = AttendanceBulkForm()
+    bulk_form.group_id.choices = [(g.id, g.name) for g in ctx['groups']]
+    bulk_form.subject_id.choices = attendance_subject_choices()
+    bulk_form.reason.choices = ctx['reasons']
+
+    return render_template('attendance.html', mark_form=mark_form,
+                           bulk_form=bulk_form,
+                           edit_form=AttendanceEditForm(), **ctx)
+
+
+@main.route('/attendance/mark', methods=['POST'])
+@staff_required
+def attendance_mark():
+    """Отметка пропуска в ячейке журнала или на странице пропусков (9.2)."""
+    form = AttendanceMarkForm()
+    form.subject_id.choices = attendance_subject_choices()
+    form.reason.choices = attendance_reason_choices()
+    if not form.validate_on_submit():
+        flash_form_errors(form)
+        return _attendance_back(request.form)
+
+    subject, failure = mark_attendance_allowed(
+        form.subject_id.data or None)
+    if failure:
+        return failure
+
+    student = db.session.get(Student, form.student_id.data)
+    if student is None:
+        flash_msg('error', 'Студент не найден')
+        return _attendance_back(request.form)
+    if student.group_id != form.group_id.data:
+        flash_msg('error', f'{student.full_name} не учится в выбранной группе')
+        log.warning('Отклонён пропуск: %s не в группе %s — %s',
+                    student.full_name, form.group_id.data, current_user.username)
+        return _attendance_back(request.form)
+
+    lesson_date = _parse_form_date(form.date.data)
+    if lesson_date is None:
+        flash_msg('error', 'Дата занятия указана неверно')
+        return _attendance_back(request.form)
+    if lesson_date > date.today():
+        flash_msg('error', 'Нельзя отметить пропуск за будущее занятие')
+        return _attendance_back(request.form)
+
+    failure = _check_lesson_happened(lesson_date, student.group_id, subject)
+    if failure:
+        return failure
+
+    exists = (AttendanceRecord.query
+              .filter_by(student_id=student.id, date=lesson_date,
+                         subject_id=subject.id if subject else None)
+              .first())
+    if exists is not None:
+        flash_msg('warning',
+                  f'{student.full_name}: пропуск на {lesson_date.strftime("%d.%m.%Y")} '
+                  f'уже отмечен ({exists.reason_label.lower()})')
+        return _attendance_back(request.form)
+
+    record = AttendanceRecord(
+        student_id=student.id, date=lesson_date, reason=form.reason.data,
+        subject_id=subject.id if subject else None,
+        note=form.note.data or None, created_by=current_user.id)
+    db.session.add(record)
+    db.session.commit()
+
+    scope = f'предмет «{subject.name}»' if subject else 'весь день'
+    log.info('Отмечен пропуск: %s, %s, %s (%s) — %s',
+             student.full_name, lesson_date.strftime('%d.%m.%Y'), scope,
+             record.reason_label, current_user.username)
+    flash_msg('success',
+              f'{student.full_name}: пропуск {lesson_date.strftime("%d.%m.%Y")} '
+              f'отмечен — {record.reason_label.lower()}')
+    return _attendance_back(request.form)
+
+
+@main.route('/attendance/<int:record_id>/edit', methods=['POST'])
+@staff_required
+def attendance_edit(record_id):
+    """Смена причины и комментария: пропуск уже записан, молча менять его
+    вкладкой в базе нельзя."""
+    form = AttendanceEditForm()
+    form.reason.choices = attendance_reason_choices()
+    record = db.session.get(AttendanceRecord, record_id)
+    if record is None:
+        flash_msg('error', 'Пропуск не найден')
+        return _attendance_back(request.form)
+
+    subject, failure = mark_attendance_allowed(record.subject_id)
+    if failure:
+        return failure
+    if not form.validate_on_submit():
+        flash_form_errors(form)
+        return _attendance_back(request.form)
+
+    old_reason = record.reason
+    record.reason = form.reason.data
+    record.note = form.note.data or None
+    db.session.commit()
+
+    student = db.session.get(Student, record.student_id)
+    log.info('Пропуск изменён: %s, %s, %s → %s — %s',
+             student.full_name if student else record.student_id,
+             record.date.strftime('%d.%m.%Y'), old_reason, record.reason,
+             current_user.username)
+    flash_msg('success',
+              f'{student.full_name}: причина изменена — {record.reason_label.lower()}')
+    return _attendance_back(request.form)
+
+
+@main.route('/attendance/<int:record_id>/delete', methods=['POST'])
+@staff_required
+def attendance_delete(record_id):
+    """Удаление пропуска (9.4). Форма отправляется только из окна
+    подтверждения, отдельной страницы удаления нет."""
+    record = db.session.get(AttendanceRecord, record_id)
+    if record is None:
+        flash_msg('error', 'Пропуск не найден')
+        return _attendance_back(request.form)
+
+    subject, failure = mark_attendance_allowed(record.subject_id)
+    if failure:
+        return failure
+
+    student = db.session.get(Student, record.student_id)
+    name = student.full_name if student else record.student_id
+    lesson_date = record.date
+    reason_label = record.reason_label
+    db.session.delete(record)
+    db.session.commit()
+
+    log.info('Пропуск удалён: %s, %s, %s — %s', name,
+             lesson_date.strftime('%d.%m.%Y'), reason_label, current_user.username)
+    flash_msg('success',
+              f'{name}: пропуск {lesson_date.strftime("%d.%m.%Y")} удалён')
+    return _attendance_back(request.form)
+
+
+@main.route('/attendance/bulk', methods=['POST'])
+@staff_required
+def attendance_bulk():
+    """Массовая отметка отсутствующих за дату (9.3)."""
+    form = AttendanceBulkForm()
+    form.group_id.choices = [(g.id, g.name) for g in Group.query.order_by(Group.name)]
+    form.subject_id.choices = attendance_subject_choices()
+    form.reason.choices = attendance_reason_choices()
+    if not form.validate_on_submit():
+        flash_form_errors(form)
+        return _attendance_back(request.form)
+
+    subject, failure = mark_attendance_allowed(form.subject_id.data or None)
+    if failure:
+        return failure
+
+    failure = _check_lesson_happened(form.date.data, form.group_id.data, subject)
+    if failure:
+        return failure
+
+    students = (Student.query
+                .filter_by(group_id=form.group_id.data, status='active')
+                .order_by(Student.id).all())
+    if not students:
+        flash_msg('warning', 'В группе нет активных студентов')
+        return _attendance_back(request.form)
+
+    # Уже отмеченные исключаем всегда, а оценки за день — по флажку:
+    # пропуск и оценка в один день означают либо ошибку, либо отметку не по
+    # тому предмету, но молча выбирать одно из двух нельзя
+    already = {(row[0], row[1]) for row in
+               (db.session.query(AttendanceRecord.student_id,
+                                 AttendanceRecord.subject_id)
+                .filter(AttendanceRecord.date == form.date.data)
+                .all())}
+    graded = set()
+    if form.skip_graded.data:
+        graded = {row[0] for row in
+                  (db.session.query(Grade.student_id)
+                   .filter(Grade.date == form.date.data,
+                           Grade.subject_id == form.subject_id.data)
+                   .all())}
+
+    skipped_graded = []
+    skipped_already = []
+    created = 0
+    for student in students:
+        subject_key = subject.id if subject else None
+        if (student.id, subject_key) in already:
+            skipped_already.append(student)
+            continue
+        if student.id in graded:
+            skipped_graded.append(student)
+            continue
+        db.session.add(AttendanceRecord(
+            student_id=student.id, date=form.date.data, reason=form.reason.data,
+            subject_id=subject_key, note=form.note.data or None,
+            created_by=current_user.id))
+        created += 1
+    db.session.commit()
+
+    scope = f'предмет «{subject.name}»' if subject else 'весь день'
+    # .data, а не само поле: у DateField нет strftime
+    log_date = form.date.data.strftime('%d.%m.%Y')
+    log.info('Массовая отметка пропусков: группа %s, %s, %s — отмечено %s, '
+             'пропущено с оценкой %s, уже отмечено %s — %s',
+             form.group_id.data, scope, log_date, created,
+             len(skipped_graded), len(skipped_already), current_user.username)
+    flash_msg('success',
+              f'Отмечено пропусков: {created} за {log_date}'
+              + (f'; с оценкой за день пропущено: {len(skipped_graded)}'
+                 if form.skip_graded.data else ''))
+    return _attendance_back(request.form)
+
+
+def dashboard_attendance_stats():
+    """Сводка пропусков за текущий период для дашборда.
+
+    Два запроса: агрегат по всем записям и пятёрка лидеров. Считать в шаблоне
+    нельзя — там получится SELECT на каждую запись при обращении к student.
+    """
+    period, failure = current_period_or_default()
+    if failure:
+        return {'total': 0, 'unexcused': 0, 'top': [], 'period_name': ''}
+
+    total, unexcused = (db.session.query(
+        func.count(AttendanceRecord.id),
+        func.sum(case((AttendanceRecord.reason ==
+                       AttendanceRecord.REASON_UNEXCUSED, 1), else_=0)))
+        .filter(AttendanceRecord.date >= period.start_date,
+                AttendanceRecord.date <= period.end_date)
+        .one())
+
+    # Не «по числу пропусков», а по числу дней: иначе студент, сидящий на
+    # парах по понедельникам, всегда был бы первым в списке
+    rows = (db.session.query(
+        AttendanceRecord.student_id,
+        func.count(func.distinct(AttendanceRecord.date)).label('total'),
+        func.sum(case((AttendanceRecord.reason ==
+                       AttendanceRecord.REASON_UNEXCUSED, 1), else_=0)).label('unexcused'))
+        .filter(AttendanceRecord.date >= period.start_date,
+                AttendanceRecord.date <= period.end_date)
+        .group_by(AttendanceRecord.student_id)
+        .order_by(desc('total'), AttendanceRecord.student_id)
+        .limit(5).all())
+
+    top = []
+    if rows:
+        students = (Student.query
+                    .options(joinedload(Student.group))
+                    .filter(Student.id.in_([row[0] for row in rows])).all())
+        by_id = {student.id: student for student in students}
+        for student_id, count, without_reason in rows:
+            student = by_id.get(student_id)
+            if student is None:
+                continue
+            top.append({'id': student.id,
+                        'last_name': student.last_name,
+                        'first_name': student.first_name,
+                        'group_name': student.group.name if student.group else '',
+                        'total': count,
+                        'unexcused': without_reason or 0})
+
+    return {'total': total or 0,
+            'unexcused': unexcused or 0,
+            'top': top,
+            'period_name': period.name}
+
+
+def _check_lesson_happened(lesson_date, group_id, subject):
+    """Пропуск отмечают только по состоявшемуся занятию.
+
+    Без проверки можно было бы отметить пропуск на любую дату внутри
+    периода, включая выходной, и сводка разошлась бы с расписанием.
+
+    Возвращает error_response или None.
+    """
+    lesson_date = _parse_form_date(lesson_date) if lesson_date else None
+    if lesson_date is None:
+        return (render_template(
+            'error.html', code=400, message='Дата занятия указана неверно.'), 400)
+
+    query = (db.session.query(LessonDate.id)
+             .join(LessonDate.schedule_item)
+             .filter(ScheduleItem.group_id == group_id,
+                     LessonDate.date == lesson_date))
+    if subject is not None:
+        query = query.filter(ScheduleItem.subject_id == subject.id)
+    if query.first() is None:
+        log.warning('Отклонён пропуск: занятия %s не было (группа %s, предмет %s) — %s',
+                    lesson_date, group_id,
+                    subject.name if subject else 'любой', current_user.username)
+        return (render_template(
+            'error.html', code=400,
+            message=f'Занятия {lesson_date.strftime("%d.%m.%Y")} не было. '
+                    f'Отметьте его в расписании.'), 400)
+    return None
 
 
 # ===================== СОТРУДНИКИ =====================

@@ -29,7 +29,9 @@
     // --- Клик по пустой части ячейки: выставить оценки ---------------------
     cells.forEach(function (cell) {
         cell.addEventListener('click', function (event) {
-            if (event.target.closest('.grade-badge')) {
+            if (event.target.closest('.grade-badge') ||
+                event.target.closest('.absence-add') ||
+                event.target.closest('.absence-mark')) {
                 return;
             }
             if (!addModal) {
@@ -114,8 +116,60 @@
             });
     }
 
-    // --- Клавиатура: стрелки по сетке, Enter — оценка ----------------------
-    function focusCell(row, col) {
+    // --- Пропуски: отметка и исправление в той же сетке --------------------
+    var absenceModalEl = document.getElementById('absenceModal');
+    var absenceEditModalEl = document.getElementById('absenceEditModal');
+    var absenceModal = absenceModalEl ? new bootstrap.Modal(absenceModalEl) : null;
+    var absenceEditModal = absenceEditModalEl
+        ? new bootstrap.Modal(absenceEditModalEl) : null;
+
+    document.querySelectorAll('.absence-add').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+            event.stopPropagation();
+            if (!absenceModal) {
+                return;
+            }
+            var form = document.getElementById('absenceForm');
+            form.querySelector('[name="student_id"]').value = button.dataset.student;
+            form.querySelector('#absenceDate').value = button.dataset.date;
+            form.querySelector('#absenceSubject').value = button.dataset.subject;
+            document.getElementById('absenceStudentName').textContent =
+                button.dataset.studentName || '';
+            document.getElementById('absenceHint').textContent =
+                columnLabelFor(button);
+            var note = form.querySelector('[name="note"]');
+            if (note) {
+                note.value = '';
+            }
+            absenceModal.show();
+        });
+    });
+
+    document.querySelectorAll('.absence-mark').forEach(function (mark) {
+        mark.addEventListener('click', function (event) {
+            event.stopPropagation();
+            if (!absenceEditModal) {
+                return;
+            }
+            var form = document.getElementById('absenceEditForm');
+            form.action = mark.dataset.editUrl;
+            form.querySelector('[name="reason"]').value = mark.dataset.reasonKey || '';
+            form.querySelector('[name="note"]').value = mark.dataset.note || '';
+            document.getElementById('absenceEditStudent').textContent =
+                mark.dataset.student || '';
+            document.getElementById('absenceEditDate').textContent =
+                'Занятие: ' + (mark.dataset.date || '') + ' · ' + (mark.dataset.reason || '');
+            absenceEditModal.show();
+        });
+    });
+
+    function columnLabelFor(button) {
+        var head = document.querySelector(
+            '.column-head[data-date="' + button.dataset.date + '"]');
+        return head ? head.textContent.replace(/\s+/g, ' ').trim() : button.dataset.date;
+    }
+
+    // --- Клавиатура: стрелки по сетке, Enter — оценка ----------------------    function focusCell(row, col) {
         var target = document.querySelector(
             '.journal-cell[data-r="' + row + '"][data-c="' + col + '"]');
         if (target) {

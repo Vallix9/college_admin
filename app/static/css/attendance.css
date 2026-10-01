@@ -1,0 +1,30 @@
+.attendance-stat-illness {
+    border-left: 4px solid var(--bs-info);
+}
+
+.attendance-stat-excused {
+    border-left: 4px solid var(--bs-success);
+}
+
+.attendance-stat-unexcused {
+    border-left: 4px solid var(--bs-danger);
+}
+
+.attendance-reason-badge {
+    font-weight: 500;
+}
+
+.attendance-reason-illness {
+    background-color: var(--bs-info-subtle);
+    color: var(--bs-info-text-emphasis);
+}
+
+.attendance-reason-excused {
+    background-color: var(--bs-success-subtle);
+    color: var(--bs-success-text-emphasis);
+}
+
+.attendance-reason-unexcused {
+    background-color: var(--bs-danger-subtle);
+    color: var(--bs-danger-text-emphasis);
+}

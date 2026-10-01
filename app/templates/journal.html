@@ -133,7 +133,9 @@
                     <th class="journal-sticky student-col">Студент</th>
                     {% for column in columns %}
                     <th class="text-center column-head
-                        {% if mode == 'dates' and column in absent_dates %}column-absent{% endif %}">
+                        {% if mode == 'dates' %}column-date{% else %}column-subject{% endif %}
+                        {% if mode == 'dates' and column in absent_dates %}column-absent{% endif %}"
+                        {% if mode == 'dates' %}data-date="{{ column }}"{% endif %}>
                         {% if mode == 'subjects' %}
                             <div class="fw-semibold">{{ column_titles[loop.index0] }}</div>
                             <div class="small text-muted">
@@ -181,9 +183,30 @@
                         {% endfor %}
                         {% set absences = attendance.get((student.id, column), []) %}
                         {% for record in absences %}
-                        <i class="bi bi-exclamation-circle text-danger"
-                           title="Пропуск: {{ record.reason_label }}{% if record.note %} — {{ record.note }}{% endif %}"></i>
+                        <i class="bi bi-exclamation-circle text-danger absence-mark"
+                           role="button"
+                           tabindex="0"
+                           title="Пропуск: {{ record.reason_label }}{% if record.note %} — {{ record.note }}{% endif %} — нажмите, чтобы исправить"
+                           data-role="absence-edit"
+                           data-record="{{ record.id }}"
+                           data-reason="{{ record.reason_label }}"
+                           data-reason-key="{{ record.reason }}"
+                           data-note="{{ record.note or '' }}"
+                           data-date="{{ column }}"
+                           data-student="{{ student.full_name }}"
+                           data-edit-url="{{ url_for('main.attendance_edit', record_id=record.id) }}"></i>
                         {% endfor %}
+                        {% if can_edit and mode == 'dates' %}
+                        <button type="button" class="absence-add"
+                                title="Отметить пропуск"
+                                data-role="absence-add"
+                                data-date="{{ column }}"
+                                data-student="{{ student.id }}"
+                                data-student-name="{{ student.full_name }}"
+                                data-subject="{{ subject.id }}">
+                            <i class="bi bi-person-x"></i>
+                        </button>
+                        {% endif %}
                     </td>
                     {% endfor %}
                     {% set student_total = totals.get(student.id) %}
@@ -373,11 +396,90 @@
         </div>
     </div>
 </div>
+
+{% if mode == 'dates' %}
+<div class="modal fade" id="absenceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.attendance_mark') }}"
+                  id="absenceForm">
+                {{ absence_form.hidden_tag() }}
+                <input type="hidden" name="group_id" value="{{ group.id }}">
+                <input type="hidden" name="mode" value="{{ mode }}">
+                <input type="hidden" name="period_id" value="{{ period.id }}">
+                <input type="hidden" name="subject_id" id="absenceSubject" value="">
+                <input type="hidden" name="date" id="absenceDate" value="">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-person-x"></i> Пропуск: <span id="absenceStudentName"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3" id="absenceHint"></p>
+                    <div class="mb-3">
+                        {{ absence_form.reason.label(class="form-label") }}
+                        {{ absence_form.reason(class="form-select") }}
+                    </div>
+                    <div class="mb-0">
+                        {{ absence_form.note.label(class="form-label") }}
+                        {{ absence_form.note(class="form-control", rows=2) }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-danger">Отметить пропуск</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="absenceEditModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" id="absenceEditForm">
+                {{ absence_edit_form.hidden_tag() }}
+                <input type="hidden" name="group_id" value="{{ group.id }}">
+                <input type="hidden" name="mode" value="{{ mode }}">
+                <input type="hidden" name="period_id" value="{{ period.id }}">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-pencil"></i> Пропуск: <span id="absenceEditStudent"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-3 small text-muted" id="absenceEditDate"></p>
+                    <div class="mb-3">
+                        {{ absence_edit_form.reason.label(class="form-label") }}
+                        {{ absence_edit_form.reason(class="form-select") }}
+                    </div>
+                    <div class="mb-0">
+                        {{ absence_edit_form.note.label(class="form-label") }}
+                        {{ absence_edit_form.note(class="form-control", rows=2) }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-danger d-none" id="absenceDeleteBtn">
+                        <i class="bi bi-trash"></i> Удалить
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endif %}
 {% endblock %}
 
-{% block scripts %}
-<script src="{{ url_for('static', filename='js/journal.js') }}"></script>
+{% block scripts %}<script src="{{ url_for('static', filename='js/journal.js') }}"></script>
 {% endblock %}

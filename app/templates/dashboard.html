@@ -60,15 +60,53 @@
         <div class="stat-card">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
-                    <div class="stat-label">Действия</div>
-                    <div class="stat-value">4</div>
-                    <small class="text-info">быстрые операции</small>
+                    <div class="stat-label">Пропуски за период</div>
+                    <div class="stat-value">{{ attendance_stats.total|default(0) }}</div>
+                    <small class="text-danger">
+                        без причины: {{ attendance_stats.unexcused|default(0) }}
+                    </small>
                 </div>
-                <i class="bi bi-journal-plus stat-icon"></i>
+                <i class="bi bi-person-x stat-icon"></i>
+            </div>
+            <a href="{{ url_for('main.attendance') }}" class="stretched-link"
+               title="Журнал пропусков"></a>
+        </div>
+    </div>
+</div>
+
+{% if attendance_stats and attendance_stats.top %}
+<div class="row fade-in">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-exclamation-circle text-danger"></i>
+                Больше всех пропусков
+                <span class="text-muted small">{{ attendance_stats.period_name }}</span>
+            </div>
+            <div class="card-body py-2">
+                {% for row in attendance_stats.top %}
+                <div class="d-flex justify-content-between align-items-center py-2
+                            {% if not loop.last %}border-bottom{% endif %}">
+                    <a href="{{ url_for('main.view_student', student_id=row.id) }}"
+                       class="text-decoration-none">
+                        {{ row.last_name }} {{ row.first_name }}
+                        <span class="text-muted small">· {{ row.group_name }}</span>
+                    </a>
+                    <span>
+                        <span class="badge bg-danger-subtle text-danger">
+                            {{ row.total }} проп.
+                        </span>
+                        {% if row.unexcused %}
+                        <span class="badge bg-secondary">{{ row.unexcused }} без причины</span>
+                        {% endif %}
+                    </span>
+                </div>
+                {% endfor %}
             </div>
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- Быстрые действия -->
 <div class="row fade-in">

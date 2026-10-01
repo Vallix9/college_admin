@@ -2,6 +2,10 @@
 
 {% block title %}College Admin - {{ student.full_name }}{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/attendance.css') }}">
+{% endblock %}
+
 {% block breadcrumb %}
 <li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
 <li class="breadcrumb-item"><a href="{{ url_for('main.students') }}">Студенты</a></li>
@@ -298,6 +302,78 @@
                 {% endif %}
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Пропуски (9.5): сводка за период и список отметок -->
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">
+            <i class="bi bi-person-x"></i> Пропуски
+            {% if attendance_period %}
+            <span class="text-muted small">{{ attendance_period.name }}</span>
+            {% endif %}
+        </h5>
+        {% if student.group_id %}
+        <a href="{{ url_for('main.attendance', group_id=student.group_id) }}"
+           class="btn btn-sm btn-outline-secondary">
+            Журнал пропусков
+        </a>
+        {% endif %}
+    </div>
+    <div class="card-body py-3">
+        <div class="row g-3 mb-3">
+            <div class="col-4">
+                <div class="text-muted small text-uppercase">Всего</div>
+                <div class="fs-4 fw-bold">{{ attendance_summary.total }}</div>
+                <div class="small text-muted">пар: {{ attendance_summary.hours }}</div>
+            </div>
+            {% for reason, label in attendance_reasons %}
+            <div class="col-4">
+                <div class="text-muted small text-uppercase">{{ label }}</div>
+                <div class="fs-4 fw-bold">{{ attendance_summary.reasons.get(reason, 0) }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if attendance_records %}
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Дата</th>
+                        <th>Предмет</th>
+                        <th>Причина</th>
+                        <th>Комментарий</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in attendance_records %}
+                    <tr>
+                        <td class="text-nowrap">{{ record.date.strftime('%d.%m.%Y') }}</td>
+                        <td class="text-nowrap">
+                            {% if record.subject %}{{ record.subject.name }}
+                            {% else %}<span class="text-muted">весь день</span>{% endif %}
+                        </td>
+                        <td class="text-nowrap">
+                            <span class="badge attendance-reason-badge attendance-reason-{{ record.reason }}">
+                                {{ record.reason_label }}
+                            </span>
+                        </td>
+                        <td class="small text-muted">{{ record.note or '' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="small text-muted mt-2 mb-0">
+            Отметки ставятся в <a href="{{ url_for('main.attendance', group_id=student.group_id) }}">журнале пропусков</a>
+            или прямо в ячейке журнала.
+        </p>
+        {% else %}
+        <p class="text-muted mb-0"><i class="bi bi-check2-circle text-success"></i>
+            За период пропусков не отмечено.</p>
+        {% endif %}
     </div>
 </div>
 

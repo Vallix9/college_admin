@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+
+{% block title %}College Admin - Пропуски{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/attendance.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active">Пропуски</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-person-x"></i>Журнал пропусков
+{% endblock %}
+
+{% block page_subtitle %}
+{{ group.name }} · {{ period.name }}
+({{ period.start_date.strftime('%d.%m.%Y') }} — {{ period.end_date.strftime('%d.%m.%Y') }})
+{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('main.students', group_id=group.id) }}" class="btn btn-outline-secondary">
+    <i class="bi bi-people"></i> Студенты
+</a>
+{% endblock %}
+
+{% block content %}
+
+<form method="GET" action="{{ url_for('main.attendance') }}" class="card mb-3">
+    <div class="card-body py-3">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label mb-1" for="group_id">Группа</label>
+                <select name="group_id" id="group_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for g in groups %}
+                    <option value="{{ g.id }}" {% if g.id == group.id %}selected{% endif %}>
+                        {{ g.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1" for="period_id">Период</label>
+                <select name="period_id" id="period_id" class="form-select form-select-sm"
+                        onchange="this.form.submit()">
+                    {% for p in periods %}
+                    <option value="{{ p.id }}" {% if p.id == period.id %}selected{% endif %}>
+                        {{ p.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-6 d-flex gap-2 justify-content-md-end">
+                <a href="{{ url_for('main.attendance', group_id=group.id, period_id=period.id) }}"
+                   class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-arrow-clockwise"></i> Сбросить
+                </a>
+                {% if can_mark_any %}
+                <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal"
+                        data-bs-target="#bulkModal">
+                    <i class="bi bi-check2-all"></i> Отметить отсутствующих
+                </button>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</form>
+
+<div class="row g-3 mb-3">
+    {% for reason, label in reasons %}
+    <div class="col-6 col-lg-3">
+        <div class="card h-100 attendance-stat attendance-stat-{{ reason }}">
+            <div class="card-body py-3">
+                <div class="text-muted small text-uppercase">{{ label }}</div>
+                <div class="fs-3 fw-bold">
+                    {{ summary.reasons.get(reason, 0) }}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    <div class="col-6 col-lg-3">
+        <div class="card h-100 attendance-stat">
+            <div class="card-body py-3">
+                <div class="text-muted small text-uppercase">Всего пропусков</div>
+                <div class="fs-3 fw-bold">{{ summary.total }}</div>
+                <div class="small text-muted">пар: {{ summary.hours }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header"><i class="bi bi-bar-chart"></i> Сводка по студентам</div>
+    {% if not students %}
+    <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-person-x display-4 d-block mb-3"></i>
+        <p class="mb-0">В группе {{ group.name }} нет активных студентов.</p>
+    </div>
+    {% else %}
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Студент</th>
+                    {% for reason, label in reasons %}
+                    <th class="text-center" title="{{ label }}">{{ label }}</th>
+                    {% endfor %}
+                    <th class="text-center">Всего</th>
+                    <th class="text-center">Пар</th>
+                    <th class="text-end">Доля</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for student in students %}
+                {% set bucket = per_student.get(student.id) %}
+                <tr class="{% if not bucket or not bucket.total %}table-light{% endif %}">
+                    <td>
+                        <a href="{{ url_for('main.view_student', student_id=student.id) }}"
+                           class="text-decoration-none">
+                            {{ student.last_name }} {{ student.first_name }}
+                        </a>
+                    </td>
+                    {% for reason, label in reasons %}
+                    <td class="text-center">
+                        {% set count = bucket.reasons.get(reason, 0) if bucket else 0 %}
+                        {% if count %}<strong>{{ count }}</strong>{% else %}
+                        <span class="text-muted">—</span>{% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="text-center">
+                        {% if bucket and bucket.total %}
+                        <strong>{{ bucket.total }}</strong>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if bucket and bucket.hours %}
+                        {{ bucket.hours }}
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if bucket and summary.total %}
+                        {{ (bucket.total / summary.total * 100)|round(1) }}%
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot class="table-light fw-semibold">
+                <tr>
+                    <td>Итого по группе</td>
+                    {% for reason, label in reasons %}
+                    <td class="text-center">{{ summary.reasons.get(reason, 0) }}</td>
+                    {% endfor %}
+                    <td class="text-center">{{ summary.total }}</td>
+                    <td class="text-center">{{ summary.hours }}</td>
+                    <td class="text-end">
+                        {% if summary.total %}100%{% else %}<span class="text-muted">—</span>{% endif %}
+                    </td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-list-ul"></i> Отметки за период
+        <span class="badge bg-secondary">{{ records|length }}</span>
+    </div>
+    {% if not records %}
+    <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-check2-circle display-4 d-block mb-3 text-success"></i>
+        <p class="mb-0">За период пропусков не отмечено.</p>
+    </div>
+    {% else %}
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Дата</th>
+                    <th>Студент</th>
+                    <th>Предмет</th>
+                    <th>Причина</th>
+                    <th>Комментарий</th>
+                    <th>Отметил</th>
+                    <th class="text-end">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                <tr>
+                    <td class="text-nowrap">{{ record.date.strftime('%d.%m.%Y') }}</td>
+                    <td class="text-nowrap">
+                        {% if record.student %}
+                        <a href="{{ url_for('main.view_student', student_id=record.student.id) }}"
+                           class="text-decoration-none">
+                            {{ record.student.last_name }} {{ record.student.first_name }}
+                        </a>
+                        {% else %}<span class="text-muted">удалён</span>{% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                        {% if record.subject %}{{ record.subject.name }}
+                        {% else %}<span class="text-muted">весь день</span>{% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                        <span class="badge attendance-reason-badge attendance-reason-{{ record.reason }}">
+                            {{ record.reason_label }}
+                        </span>
+                    </td>
+                    <td class="small text-muted">{{ record.note or '' }}</td>
+                    <td class="small text-nowrap">
+                        {% if record.author %}{{ record.author.short_name }}
+                        {% else %}<span class="text-muted">—</span>{% endif %}
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                data-bs-toggle="modal" data-bs-target="#editModal"
+                                data-record="{{ record.id }}"
+                                data-reason="{{ record.reason }}"
+                                data-note="{{ record.note or '' }}"
+                                data-student="{{ record.student.last_name }} {{ record.student.first_name }}"
+                                data-date="{{ record.date.strftime('%d.%m.%Y') }}"
+                                data-edit-url="{{ url_for('main.attendance_edit', record_id=record.id) }}"
+                                data-delete-url="{{ url_for('main.attendance_delete', record_id=record.id) }}">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger"
+                                data-bs-toggle="modal" data-bs-target="#deleteModal"
+                                data-student="{{ record.student.last_name }} {{ record.student.first_name }}"
+                                data-date="{{ record.date.strftime('%d.%m.%Y') }}"
+                                data-reason="{{ record.reason_label }}"
+                                data-delete-url="{{ url_for('main.attendance_delete', record_id=record.id) }}">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+
+{% if can_mark_any %}
+<div class="modal fade" id="bulkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.attendance_bulk') }}">
+                {{ bulk_form.hidden_tag() }}
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-check2-all"></i> Массовая отметка</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small">
+                        Отмечу пропуск всем активным студентам группы, у которых на эту
+                        дату ещё нет отметки. Уже отмеченных не трогаю.
+                    </p>
+                    <div class="row g-3">
+                        <div class="col-12">
+                            {{ bulk_form.group_id.label(class="form-label") }}
+                            {{ bulk_form.group_id(class="form-select") }}
+                        </div>
+                        <div class="col-12">
+                            {{ bulk_form.subject_id.label(class="form-label") }}
+                            {{ bulk_form.subject_id(class="form-select") }}
+                        </div>
+                        <div class="col-12">
+                            {{ bulk_form.date.label(class="form-label") }}
+                            {{ bulk_form.date(class="form-control", type="date") }}
+                            <div class="form-text">Дата должна быть занятием в расписании группы.</div>
+                        </div>
+                        <div class="col-12">
+                            {{ bulk_form.reason.label(class="form-label") }}
+                            {{ bulk_form.reason(class="form-select") }}
+                        </div>
+                        <div class="col-12">
+                            {{ bulk_form.note.label(class="form-label") }}
+                            {{ bulk_form.note(class="form-control", rows=2) }}
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                {{ bulk_form.skip_graded(class="form-check-input") }}
+                                {{ bulk_form.skip_graded.label(class="form-check-label") }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Отмена
+                    </button>
+                    <button class="btn btn-danger">Отметить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" id="editForm">
+                {{ edit_form.hidden_tag() }}
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-pencil"></i> Пропуск: <span id="editStudent"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted" id="editDate"></p>
+                    <div class="mb-3">
+                        {{ edit_form.reason.label(class="form-label") }}
+                        {{ edit_form.reason(class="form-select") }}
+                    </div>
+                    <div class="mb-0">
+                        {{ edit_form.note.label(class="form-label") }}
+                        {{ edit_form.note(class="form-control", rows=2) }}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-trash text-danger"></i> Удалить пропуск?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">
+                    Пропуск <strong id="deleteStudent"></strong>
+                    за <span id="deleteDate"></span> (<span id="deleteReason"></span>)
+                    будет удалён. Оценки за это занятие не затрагиваются.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    Отмена
+                </button>
+                <form method="POST" id="deleteForm" class="d-inline">
+                    <input type="hidden" name="group_id" value="{{ group.id }}">
+                    <input type="hidden" name="period_id" value="{{ period.id }}">
+                    <button class="btn btn-danger">Удалить</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/attendance.js') }}"></script>
+{% endblock %}

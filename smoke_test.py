@@ -79,6 +79,8 @@ PAGES = [
     (f'/periods/{period_id}/edit', 'редактирование периода'),
     ('/schedule', 'расписание'),
     (f'/schedule?group_id={group_id}', 'расписание группы из параметра'),
+    ('/attendance', 'журнал пропусков'),
+    (f'/attendance?group_id={group_id}', 'пропуски группы из параметра'),
     ('/reports', 'отчёты'),
     ('/reports/students', 'отчёт по студентам в Excel'),
     (f'/reports/group/{group_id}', 'отчёт по группе в Excel'),

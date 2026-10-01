@@ -1,6 +1,7 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField, EmailField, HiddenField
-from wtforms.validators import DataRequired, Length, EqualTo, Optional, Email, ValidationError, NumberRange
+from wtforms.validators import (DataRequired, InputRequired, Length, EqualTo,
+                                Optional, Email, ValidationError, NumberRange)
 from wtforms.widgets import ListWidget, CheckboxInput
 from app.models import User, Subject, SystemSettings
 from app.utils import parse_grade_values
@@ -228,6 +229,21 @@ class LessonDateForm(FlaskForm):
             raise ValidationError('Нельзя отметить занятие в будущем')
 
 
+def to_int(value):
+    """Приведение скрытых полей к int.
+
+    Скрытое поле приходит строкой, а в базе лежит целое, и сравнение
+    «2 != '2» всегда истинно. Пустое значение оставляем как None, иначе
+    int(None) уронил бы страницу ещё на отрисовке формы.
+    """
+    if value is None or str(value).strip() == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValidationError('Ожидалось целое число')
+
+
 class JournalGradeForm(FlaskForm):
     """Выставление оценок в ячейке журнала.
 
@@ -236,7 +252,7 @@ class JournalGradeForm(FlaskForm):
     Каждая оценка сохраняется отдельной строкой Grade, иначе в истории
     правок нельзя было бы отличить одну от другой.
     """
-    student_id = HiddenField()
+    student_id = HiddenField(filters=[to_int])
     subject_id = SelectField('Предмет*', coerce=int, validators=[DataRequired()])
     period_id = HiddenField()
     # Режим «по датам»: дата приходит из самой ячейки, скрытым полем.
@@ -292,6 +308,88 @@ class JournalEditForm(FlaskForm):
         if len(values) != 1:
             raise ValidationError('Нужна ровно одна оценка')
         field.data = values[0]
+
+
+# Причины пропуска живут в модели (AttendanceRecord.REASON_LABELS), список
+# для формы собирается там же, чтобы подписи не расходились между
+# журналом пропусков, сеткой и отчётами.
+def attendance_reason_choices():
+    from app.models import AttendanceRecord
+    return [(reason, label)
+            for reason, label in AttendanceRecord.REASON_LABELS.items()]
+
+
+# Значение «весь день» в выпадающих списках предметов. Ноль — заведомо
+# несуществующий id, поэтому подставиться вместо предмета он не может.
+ALL_DAY_SUBJECT = 0
+ALL_DAY_LABEL = 'Весь день (все пары)'
+
+
+# Причина по умолчанию — «без уважительной причины»: чаще всего пропуск
+# отмечают, когда студент просто не пришёл и разбираться с причиной будут
+# позже, а не пустую форму оставлять.
+DEFAULT_ATTENDANCE_REASON = 'unexcused'
+
+
+class AttendanceMarkForm(FlaskForm):
+    """Отметка пропуска в одной ячейке журнала (9.2).
+
+    Дата занятия приходит из ячейки скрытым полем и проверяется на
+    сервере: занятие должно существовать у этой группы и предмета.
+    """
+    student_id = HiddenField(validators=[InputRequired()], filters=[to_int])
+    group_id = HiddenField(validators=[InputRequired()], filters=[to_int])
+    period_id = HiddenField()
+    mode = HiddenField()
+    # Ноль вместо id предмета — «отсутствовал весь день»: зачёт идёт по всем
+    # парам дня. Вариант есть только у администратора, потому что такая
+    # отметка задевает чужие предметы; преподавателю её выбрать нельзя.
+    # InputRequired, а не DataRequired: вариант «весь день» имеет значение 0,
+    # а DataRequired считает ноль пустым полем и отвергает его всегда
+    subject_id = SelectField('Предмет*', coerce=int,
+                             validators=[InputRequired('Выберите предмет')])
+    date = HiddenField(validators=[InputRequired()])
+    reason = SelectField('Причина*', coerce=str,
+                         validators=[DataRequired('Выберите причину')])
+    note = TextAreaField('Комментарий', validators=[Optional(), Length(max=300)])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.reason.data:
+            self.reason.data = DEFAULT_ATTENDANCE_REASON
+
+
+class AttendanceBulkForm(FlaskForm):
+    """Массовая отметка отсутствующих за дату (9.3).
+
+    Отмечаются все активные студенты группы, у которых на эту дату ещё нет
+    пропуска. По умолчанию пропускаются те, у кого за день есть оценка:
+    человек с оценкой явно был на занятии, и запись «отсутствовал» рядом с
+    ней смотрится как ошибка преподавателя.
+    """
+    group_id = SelectField('Группа*', coerce=int,
+                           validators=[DataRequired('Выберите группу')])
+    # InputRequired: значение 0 — это вариант «весь день», DataRequired его
+    # отверг бы как пустое поле
+    subject_id = SelectField('Предмет*', coerce=int,
+                             validators=[InputRequired('Выберите предмет')])
+    date = DateField('Дата занятия*',
+                     validators=[DataRequired('Укажите дату занятия')])
+    reason = SelectField('Причина*', coerce=str,
+                         validators=[DataRequired('Выберите причину')])
+    note = TextAreaField('Комментарий', validators=[Optional(), Length(max=300)])
+    skip_graded = BooleanField('Не отмечать тех, у кого есть оценка за день',
+                               default=True)
+
+    def validate_date(self, field):
+        if field.data and field.data > date.today():
+            raise ValidationError('Нельзя отметить пропуск за будущее занятие')
+
+
+class AttendanceEditForm(FlaskForm):
+    """Смена причины и комментария у уже отмеченного пропуска."""
+    reason = SelectField('Причина*', coerce=str, validators=[DataRequired()])
+    note = TextAreaField('Комментарий', validators=[Optional(), Length(max=300)])
 
 
 class StaffForm(FlaskForm):
