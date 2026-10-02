@@ -24,6 +24,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from app.init_ import create_app, db
 from app.models import (User, Group, Student, Subject, Grade, SystemSettings,
+                        AuditLog,
                         AcademicPeriod, ScheduleItem, LessonDate)
 from app.utils import build_periods
 
@@ -71,10 +72,20 @@ def flash_of(html):
             for chunk in found if chunk.strip()]
 
 
+def _audit_max_id():
+    """Наибольший id в журнале действий — точка отсчёта для очистки.
+
+    Вызывается из snapshot(), где контекст приложения уже открыт: свой
+    контекст здесь только развёл бы читателя по лишней сессии.
+    """
+    return db.session.query(db.func.max(AuditLog.id)).scalar() or 0
+
+
 def snapshot():
     """Состояние, которое нужно вернуть после проверки."""
     with app.app_context():
         return {
+            'audit_max_id': _audit_max_id(),
             'settings_period_kind': SystemSettings.get_settings().period_kind,
             'periods': [{'id': p.id, 'name': p.name, 'year': p.academic_year,
                          'start': p.start_date, 'end': p.end_date,
@@ -140,6 +151,12 @@ def restore(state):
                 schedule_item_id=item_ids.get(data['item'], data['item']),
                 date=data['date']))
         SystemSettings.get_settings().period_kind = state['settings_period_kind']
+        db.session.commit()
+        # Журнал действий (Фаза 13) тест тоже наполняет: без сброса каждый
+        # прогон оставлял бы в рабочей базе записи о тестовых входах
+        for entry in AuditLog.query.filter(
+                AuditLog.id > state['audit_max_id']).all():
+            db.session.delete(entry)
         db.session.commit()
 
 

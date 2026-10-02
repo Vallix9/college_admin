@@ -10,7 +10,7 @@ import os
 from app.init_ import db
 from app.models import (User, Student, Group, Subject, Grade, SystemSettings,
                         AcademicPeriod, ScheduleItem, LessonDate,
-                        AttendanceRecord, GradeHistory, PeriodResult)
+                        AttendanceRecord, GradeHistory, PeriodResult, AuditLog)
 from app.forms import LoginForm, StudentForm, GroupForm, GradeForm, SubjectForm, SettingsForm, BackupForm, ImportForm
 from app.forms import ClearLogsForm, StaffForm, StaffPasswordResetForm, AccountPasswordForm
 from app.forms import StudentAccountForm
@@ -25,7 +25,8 @@ from app.utils import export_to_excel, format_date, create_backup, restore_backu
 from app.utils import EXPORT_DIR
 import pandas as pd
 from app.utils import list_backups, delete_backup, get_backup_dir, sanitize_filename
-from app.utils import get_logger, average_grade, build_import_template
+from app.utils import (get_logger, average_grade, build_import_template,
+                        log_audit)
 from app.utils import grade_distribution, journal_totals
 from app.utils import recommend_final_grade, grade_quality_stats
 from app.utils import read_log_lines, get_log_file_path, clear_log_file
@@ -332,6 +333,8 @@ def login():
             log.warning('Попытка входа заблокированного пользователя «%s» с %s',
                         form.username.data, request.remote_addr)
             flash_msg('error', 'Учётная запись отключена. Обратитесь к администратору.')
+            log_audit('login_blocked', user=user,
+                      details=f'login={user.username!r}')
         elif password_ok:
             login_user(user, remember=form.remember_me.data)
             next_page = request.args.get('next')
@@ -343,6 +346,7 @@ def login():
             db.session.commit()
             log.info('Вход выполнен: %s (роль: %s) с %s',
                      user.username, user.role, request.remote_addr)
+            log_audit('login', user=user)
             flash_msg('success', f'Добро пожаловать, {user.display_name}!')
             return redirect(next_page)
         
@@ -352,6 +356,12 @@ def login():
             log.warning('Неудачная попытка входа: логин «%s» с %s',
                         form.username.data, request.remote_addr)
             flash_msg('error', 'Неверное имя пользователя или пароль')
+            # 13.2: попытка входа — тоже действие. Логин пишем (без пароля),
+            # чтобы было видно подбор: user=None, потому что запись может
+            # не существовать. Попытки неудачного входа — источник для
+            # Фазы 14.4 (ограничение попыток).
+            log_audit('login_failed', user=None,
+                      details=f'login={form.username.data!r}')
     
     return render_template('login.html', form=form)
 
@@ -359,6 +369,7 @@ def login():
 @login_required
 def logout():
     log.info('Выход: %s', current_user.username)
+    log_audit('logout', user=current_user)
     logout_user()
     flash_msg('success', 'Вы успешно вышли из системы')
     return redirect(url_for('main.login'))
@@ -378,6 +389,32 @@ def students():
                          groups=Group.query.all(),
                          current_filters=filters,
                          averages=student_average_grades())
+
+def changed_fields(form, obj, skip=()):
+    """Имена полей формы, значения которых реально поменялись.
+
+    Сравнение идёт с текущими значениями объекта, а не с исходными данными
+    формы: форма уже заполнена значениями объекта при создании
+    (obj=student), поэтому сравнивать надо с ним. В аудит идёт список
+    названий, а не значений — в карточке студента есть email, телефон и
+    дата рождения, и дублировать их в журнале действий незачем.
+    """
+    names = []
+    for name in form.data:
+        # WTForms отдаёт в form.data ещё служебные csrf-токены
+        if name.startswith('csrf') or name in skip:
+            continue
+        field = getattr(form, name, None)
+        if field is None or not hasattr(field, 'data'):
+            continue
+        before = getattr(obj, name, None)
+        after = field.data
+        if isinstance(after, str):
+            after = after or None
+        if after != before:
+            names.append(name)
+    return names
+
 
 @main.route('/students/add', methods=['GET', 'POST'])
 @admin_required
@@ -404,6 +441,12 @@ def add_student():
             log.info('Добавлен студент: %s (группа: %s, статус: %s) — %s',
                      student.full_name, student.group.name if student.group else '—',
                      student.status, current_user.username)
+            log_audit('student_create', user=current_user, entity_type='student',
+                      entity_id=student.id,
+                      details=f'студент={student.full_name!r}, '
+                              f'номер={student.student_id!r}, '
+                              f'группа={student.group_id}, '
+                              f'статус={student.status!r}')
             flash_msg('success', f'Студент {student.full_name} успешно добавлен')
             return redirect(url_for('main.students'))
         except IntegrityError:
@@ -444,6 +487,12 @@ def edit_student(id):
                             old_login, new_login, current_user.username)
                 account.username = new_login
 
+            # Список изменённых полей снимаем до populate_obj: после него
+            # в объекте уже новые значения и сравнивать не с чем.
+            changed = changed_fields(form, student, skip=('group_id',))
+            if old_login != new_login and account is not None:
+                changed.append('account_login')
+
             form.populate_obj(student)
             student.group_id = form.group_id.data if form.group_id.data != 0 else None
             if account:
@@ -453,6 +502,11 @@ def edit_student(id):
                 account.email = student.email or None
             db.session.commit()
             log.info('Изменён студент: %s — %s', student.student_id, current_user.username)
+            # Список изменённых полей, а не их значения: email и телефон
+            # относятся к персональным данным и в аудите не нужны
+            log_audit('student_edit', user=current_user, entity_type='student',
+                      entity_id=student.id,
+                      details=f'студент={student.full_name!r}, поля={changed!r}')
             flash_msg('success', f'Данные студента {student.full_name} обновлены')
             return redirect(url_for('main.students'))
         except IntegrityError:
@@ -477,6 +531,8 @@ def delete_student(id):
         db.session.delete(student)
         db.session.commit()
         log.warning('Удалён студент: %s — %s', full_name, current_user.username)
+        log_audit('student_delete', user=current_user, entity_type='student',
+                  entity_id=id, details=f'студент={full_name!r}')
         flash_msg('success', f'Студент {full_name} удален')
     except Exception as e:
         db.session.rollback()
@@ -590,6 +646,10 @@ def add_grade_to_student(student_id):
         log.info('Оценка добавлена: студент %s, предмет «%s», значение %s (%s) — %s',
                  student.full_name, subject.name, grade_value, grade_type,
                  current_user.username)
+        log_audit('grade_create', user=current_user, entity_type='grade',
+                  entity_id=grade.id,
+                  details=f'студент={student.full_name!r}, предмет={subject.name!r}, '
+                          f'оценка={grade_value!r}')
         flash_msg('success', f'Оценка по предмету "{subject.name}" успешно добавлена')
     except Exception as e:
         db.session.rollback()
@@ -615,6 +675,9 @@ def delete_student_grade(student_id, grade_id):
         db.session.delete(grade)
         db.session.commit()
         log.warning('Оценка удалена: %s — %s', info, current_user.username)
+        log_audit('grade_delete', user=current_user, entity_type='grade',
+                  entity_id=grade_id,
+                  details=f'студент_id={student_id}, {info!r}')
         flash_msg('success', 'Оценка удалена')
     except Exception as e:
         db.session.rollback()
@@ -654,6 +717,9 @@ def add_group():
             db.session.commit()
             log.info('Добавлена группа: %s (%s) — %s',
                      group.name, group.specialty, current_user.username)
+            log_audit('group_create', user=current_user, entity_type='group',
+                      entity_id=group.id,
+                      details=f'название={group.name!r}, год={group.year}')
             flash_msg('success', f'Группа {group.name} успешно добавлена')
             return redirect(url_for('main.groups'))
         except IntegrityError:
@@ -677,6 +743,10 @@ def edit_group(id):
             form.populate_obj(group)
             db.session.commit()
             log.info('Изменена группа: %s — %s', group.name, current_user.username)
+            log_audit('group_edit', user=current_user, entity_type='group',
+                      entity_id=group.id,
+                      details=f'название={group.name!r}, специальность={group.specialty!r}, '
+                              f'год={group.year}')
             flash_msg('success', f'Группа {group.name} обновлена')
             return redirect(url_for('main.groups'))
         except IntegrityError:
@@ -699,6 +769,8 @@ def delete_group(id):
         db.session.delete(group)
         db.session.commit()
         log.warning('Удалена группа: %s — %s', name, current_user.username)
+        log_audit('group_delete', user=current_user, entity_type='group',
+                  entity_id=id, details=f'название={name!r}')
         flash_msg('success', f'Группа {name} удалена')
     except Exception as e:
         db.session.rollback()
@@ -756,6 +828,8 @@ def add_subject():
                 db.session.commit()
                 log.info('Массово добавлено предметов: %d — %s',
                          added_count, current_user.username)
+                log_audit('subjects_bulk_create', user=current_user,
+                          entity_type='subject', details=f'количество={added_count}')
                 flash_msg('success', f'Добавлено {added_count} новых предметов')
             else:
                 flash_msg('warning', 'Не удалось добавить ни одного предмета (возможно, они уже существуют)')
@@ -779,6 +853,9 @@ def add_subject():
                 db.session.commit()
                 log.info('Добавлен предмет: «%s», %d ч. — %s',
                          subject.name, hours, current_user.username)
+                log_audit('subject_create', user=current_user,
+                          entity_type='subject', entity_id=subject.id,
+                          details=f'название={subject.name!r}, часы={hours}')
                 flash_msg('success', f'Предмет "{subject.name}" успешно добавлен')
                 return redirect(url_for('main.subjects'))
             except IntegrityError:
@@ -817,6 +894,9 @@ def edit_subject(id):
         try:
             db.session.commit()
             log.info('Изменён предмет: «%s» — %s', subject.name, current_user.username)
+            log_audit('subject_edit', user=current_user, entity_type='subject',
+                      entity_id=subject.id,
+                      details=f'название={subject.name!r}, часы={subject.hours}')
             flash_msg('success', f'Предмет "{subject.name}" обновлен')
             return redirect(url_for('main.subjects'))
         except IntegrityError:
@@ -849,6 +929,8 @@ def delete_subject(id):
         db.session.delete(subject)
         db.session.commit()
         log.warning('Удалён предмет: «%s» — %s', name, current_user.username)
+        log_audit('subject_delete', user=current_user, entity_type='subject',
+                  entity_id=id, details=f'название={name!r}')
         flash_msg('success', f'Предмет "{name}" удален')
     except Exception as e:
         db.session.rollback()
@@ -948,6 +1030,12 @@ def add_grade():
             log.info('Оценка добавлена: %s, предмет «%s», значение %s (%s) от %s — %s',
                      student.full_name, subject.name, form.grade_value.data,
                      form.grade_type.data, form.date.data, current_user.username)
+            log_audit('grade_create', user=current_user, entity_type='grade',
+                      entity_id=grade.id,
+                      details=f'студент={student.full_name!r}, '
+                              f'предмет={subject.name!r}, '
+                              f'оценка={form.grade_value.data!r}, '
+                              f'тип={form.grade_type.data!r}')
             flash_msg('success', f'Оценка по предмету "{subject.name}" для студента {student.full_name} успешно добавлена')
             return redirect(url_for('main.grades'))
         except Exception as e:
@@ -975,6 +1063,8 @@ def delete_grade(id):
         db.session.delete(grade)
         db.session.commit()
         log.warning('Оценка удалена: %s — %s', info, current_user.username)
+        log_audit('grade_delete', user=current_user, entity_type='grade',
+                  entity_id=id, details=info)
         flash_msg('success', 'Оценка удалена')
     except Exception as e:
         db.session.rollback()
@@ -1049,6 +1139,11 @@ def add_period():
             db.session.commit()
             log.info('Добавлен учебный период: %s %s — %s',
                      period.name, period.academic_year, current_user.username)
+            log_audit('period_create', user=current_user, entity_type='period',
+                      entity_id=period.id,
+                      details=f'название={period.name!r}, '
+                              f'год={period.academic_year!r}, '
+                              f'номер={period.sort_order}')
             flash_msg('success', f'Период «{period.name}» добавлен')
             return redirect(url_for('main.periods'))
         except IntegrityError:
@@ -1079,6 +1174,11 @@ def edit_period(id):
             db.session.commit()
             log.info('Изменён учебный период: %s — %s',
                      period.name, current_user.username)
+            log_audit('period_edit', user=current_user, entity_type='period',
+                      entity_id=period.id,
+                      details=f'название={period.name!r}, '
+                              f'год={period.academic_year!r}, '
+                              f'номер={period.sort_order}')
             flash_msg('success', f'Период «{period.name}» обновлён')
             return redirect(url_for('main.periods'))
         except IntegrityError:
@@ -1106,6 +1206,8 @@ def delete_period(id):
     db.session.delete(period)
     db.session.commit()
     log.warning('Удалён учебный период: %s %s — %s', name, year, current_user.username)
+    log_audit('period_delete', user=current_user, entity_type='period',
+              entity_id=id, details=f'название={name!r}, год={year!r}')
     flash_msg('success', f'Период «{name}» удалён')
     return redirect(url_for('main.periods'))
 
@@ -1142,6 +1244,10 @@ def generate_periods():
         log.info('Созданы учебные периоды: %d за %s (%s) — %s',
                  created, form.academic_year.data, form.kind.data,
                  current_user.username)
+        log_audit('periods_generate', user=current_user, entity_type='period',
+                  details=f'год={form.academic_year.data!r}, '
+                          f'вид={form.kind.data!r}, создано={created}, '
+                          f'пропущено={skipped}')
         message = f'Создано периодов: {created}'
         if skipped:
             message += f' (пропущено уже существовавших: {skipped})'
@@ -1253,6 +1359,12 @@ def add_schedule_item():
                  db.session.get(Group, item.group_id).name,
                  ScheduleItem.DAY_LABELS.get(item.day_of_week), item.lesson_number,
                  current_user.username)
+        log_audit('schedule_item_create', user=current_user,
+                  entity_type='schedule_item', entity_id=item.id,
+                  details=f'группа={item.group_id}, '
+                          f'день={ScheduleItem.DAY_LABELS.get(item.day_of_week)!r}, '
+                          f'пара={item.lesson_number}, '
+                          f'предмет_id={item.subject_id}')
         flash_msg('success', 'Занятие добавлено в расписание')
     except IntegrityError:
         db.session.rollback()
@@ -1293,6 +1405,11 @@ def fill_schedule_day():
              ScheduleItem.DAY_LABELS.get(form.day_of_week.data),
              form.first_lesson.data, form.last_lesson.data, created,
              len(conflicts), current_user.username)
+    log_audit('schedule_day_fill', user=current_user, entity_type='schedule_item',
+              details=f'группа={group.id}, '
+                      f'день={ScheduleItem.DAY_LABELS.get(form.day_of_week.data)!r}, '
+                      f'пары={form.first_lesson.data}-{form.last_lesson.data}, '
+                      f'создано={created}, конфликтов={len(conflicts)}')
     if created and not conflicts:
         flash_msg('success', f'Добавлено занятий: {created}')
     elif created and conflicts:
@@ -1317,6 +1434,9 @@ def delete_schedule_item(id):
     db.session.delete(item)
     db.session.commit()
     log.warning('Удалено занятие из расписания: id %d — %s', id, current_user.username)
+    log_audit('schedule_item_delete', user=current_user,
+              entity_type='schedule_item', entity_id=id,
+              details=f'группа={group_id}')
     flash_msg('success', 'Занятие удалено из расписания')
     return redirect(url_for('main.schedule', group_id=group_id,
                             date=selected_date_from(request)))
@@ -1363,6 +1483,10 @@ def mark_lessons():
     log.info('Отметки о занятиях на %s, группа %s: добавлено %d, снято %d — %s',
              form.date.data, group.name, len(created), len(removed),
              current_user.username)
+    log_audit('lessons_mark', user=current_user, entity_type='lesson_date',
+              details=f'группа={group.id}, '
+                      f'дата={form.date.data.strftime("%d.%m.%Y")!r}, '
+                      f'отмечено={len(created)}, снято={len(removed)}')
     message = f'Отмечено занятий: {len(created)}'
     if removed:
         message += f', снято отметок: {len(removed)}'
@@ -1915,6 +2039,10 @@ def journal_add_grade():
     log.info('Оценки выставлены: %s, предмет «%s», %s за %s — %s',
              student.full_name, subject.name, ', '.join(values),
              lesson_date.strftime('%d.%m.%Y'), current_user.username)
+    log_audit('journal_grade_create', user=current_user, entity_type='grade',
+              details=f'студент={student.full_name!r}, предмет={subject.name!r}, '
+                      f'оценки={values!r}, '
+                      f'дата={lesson_date.strftime("%d.%m.%Y")!r}')
     word = 'оценка' if len(values) == 1 else 'оценки'
     flash_msg('success',
               f'{student.full_name}: {", ".join(values)} — {word} выставлена')
@@ -1957,6 +2085,11 @@ def journal_edit_grade(grade_id):
     log.info('Оценка исправлена: %s, предмет «%s», %s → %s — %s',
              student.full_name if student else grade.student_id, subject.name,
              old_value, new_value, current_user.username)
+    log_audit('journal_grade_edit', user=current_user, entity_type='grade',
+              entity_id=grade.id,
+              details=f'студент={student.full_name if student else grade.student_id!r}, '
+                      f'предмет={subject.name!r}, было={old_value!r}, '
+                      f'стало={new_value!r}')
     flash_msg('success', f'Оценка исправлена: {old_value} → {new_value}')
     return _journal_back(request.form)
 
@@ -1989,6 +2122,12 @@ def journal_delete_grade(grade_id):
     log.warning('Оценка удалена из журнала: %s, предмет «%s», значение %s — %s',
                 student.full_name if student else grade.student_id,
                 subject.name, value, current_user.username)
+    # entity_id — id удалённой оценки: он уже не существует в таблице grade,
+    # но в аудите остаётся как след удаления
+    log_audit('journal_grade_delete', user=current_user, entity_type='grade',
+              entity_id=grade_id,
+              details=f'студент={student.full_name if student else grade.student_id!r}, '
+                      f'предмет={subject.name!r}, значение={value!r}')
     flash_msg('success', f'Оценка {value} удалена')
     return _journal_back(request.form)
 
@@ -2319,6 +2458,11 @@ def attendance_mark():
     log.info('Отмечен пропуск: %s, %s, %s (%s) — %s',
              student.full_name, lesson_date.strftime('%d.%m.%Y'), scope,
              record.reason_label, current_user.username)
+    log_audit('attendance_create', user=current_user,
+              entity_type='attendance', entity_id=record.id,
+              details=f'студент={student.full_name!r}, '
+                      f'дата={lesson_date.strftime("%d.%m.%Y")!r}, '
+                      f'причина={record.reason_label!r}')
     flash_msg('success',
               f'{student.full_name}: пропуск {lesson_date.strftime("%d.%m.%Y")} '
               f'отмечен — {record.reason_label.lower()}')
@@ -2354,6 +2498,11 @@ def attendance_edit(record_id):
              student.full_name if student else record.student_id,
              record.date.strftime('%d.%m.%Y'), old_reason, record.reason,
              current_user.username)
+    log_audit('attendance_edit', user=current_user, entity_type='attendance',
+              entity_id=record.id,
+              details=f'студент={student.full_name if student else record.student_id!r}, '
+                      f'дата={record.date.strftime("%d.%m.%Y")!r}, '
+                      f'было={old_reason!r}, стало={record.reason!r}')
     flash_msg('success',
               f'{student.full_name}: причина изменена — {record.reason_label.lower()}')
     return _attendance_back(request.form)
@@ -2382,6 +2531,11 @@ def attendance_delete(record_id):
 
     log.info('Пропуск удалён: %s, %s, %s — %s', name,
              lesson_date.strftime('%d.%m.%Y'), reason_label, current_user.username)
+    log_audit('attendance_delete', user=current_user, entity_type='attendance',
+              entity_id=record_id,
+              details=f'студент={name!r}, '
+                      f'дата={lesson_date.strftime("%d.%m.%Y")!r}, '
+                      f'причина={reason_label!r}')
     flash_msg('success',
               f'{name}: пропуск {lesson_date.strftime("%d.%m.%Y")} удалён')
     return _attendance_back(request.form)
@@ -2455,6 +2609,11 @@ def attendance_bulk():
              'пропущено с оценкой %s, уже отмечено %s — %s',
              form.group_id.data, scope, log_date, created,
              len(skipped_graded), len(skipped_already), current_user.username)
+    log_audit('attendance_bulk', user=current_user, entity_type='attendance',
+              details=f'группа={form.group_id.data}, {scope}, дата={log_date!r}, '
+                      f'отмечено={created}, '
+                      f'пропущено_с_оценкой={len(skipped_graded)}, '
+                      f'уже_отмечено={len(skipped_already)}')
     flash_msg('success',
               f'Отмечено пропусков: {created} за {log_date}'
               + (f'; с оценкой за день пропущено: {len(skipped_graded)}'
@@ -2585,6 +2744,10 @@ def add_staff():
             db.session.commit()
             log.info('Создан сотрудник: %s (роль %s) — %s',
                      user.username, user.role, current_user.username)
+            log_audit('staff_create', user=current_user, entity_type='user',
+                      entity_id=user.id,
+                      details=f'логин={user.username!r}, роль={user.role!r}, '
+                              f'пароль выдан временный')
             flash_msg('success', f'Сотрудник {user.display_name} создан')
             return redirect(url_for('main.staff'))
         except IntegrityError:
@@ -2627,6 +2790,10 @@ def edit_staff(id):
             log.info('Изменён сотрудник %s: роль %s, активен %s — %s',
                      user.username, user.role, user.is_active,
                      current_user.username)
+            log_audit('staff_edit', user=current_user, entity_type='user',
+                      entity_id=user.id,
+                      details=f'логин={user.username!r}, роль={user.role!r}, '
+                              f'активен={user.is_active}')
             flash_msg('success', f'Данные сотрудника {user.display_name} сохранены')
             return redirect(url_for('main.staff'))
         except Exception as e:
@@ -2651,6 +2818,9 @@ def reset_staff_password(id):
         db.session.commit()
         log.warning('Сброшен пароль сотрудника %s — %s',
                     user.username, current_user.username)
+        log_audit('staff_password_reset', user=current_user, entity_type='user',
+                  entity_id=user.id,
+                  details=f'логин={user.username!r}, пароль сброшен')
         flash_msg('success', f'Пароль сотрудника {user.display_name} сброшен')
     except Exception as e:
         db.session.rollback()
@@ -2684,6 +2854,8 @@ def delete_staff(id):
         db.session.delete(user)
         db.session.commit()
         log.warning('Удалён сотрудник: %s — %s', username, current_user.username)
+        log_audit('staff_delete', user=current_user, entity_type='user',
+                  entity_id=id, details=f'логин={username!r}')
         flash_msg('success', f'Сотрудник {username} удалён')
     except Exception as e:
         db.session.rollback()
@@ -2801,6 +2973,11 @@ def issue_accounts():
     log.info('Выдано учётных записей студентам: %d%s — %s',
              len(issued), f' (группа {group_id})' if group_id else '',
              current_user.username)
+    # 13.2/13.4: в аудит — число выданных записей, но не сами пароли
+    log_audit('accounts_issue', user=current_user, entity_type='user',
+              entity_id=None,
+              details=f'выдано={len(issued)}, группа={group_id}, '
+                      f'пропущено={len(skipped)}, пароли временные')
     for row in skipped:
         log.warning('Логин «%s» занят, учётная запись не выдана: %s',
                     row['login'], row['name'])
@@ -2841,6 +3018,10 @@ def download_credentials(filename):
     if not safe.endswith('.xlsx') or '/' in filename or '\\' in filename:
         flash_msg('error', 'Недопустимое имя файла')
         return redirect(url_for('main.accounts'))
+    # В файле лежат действующие пароли студентов: скачивание само по себе
+    # должно быть видно в журнале действий
+    log_audit('credentials_download', user=current_user,
+              entity_type='credentials_file', details=f'файл={safe!r}')
     return send_from_directory(EXPORT_DIR, safe, as_attachment=True)
 
 
@@ -2891,9 +3072,17 @@ def set_student_account(id):
     if was_new:
         log.info('Выдана учётная запись студенту %s (логин %s) — %s',
                  student.full_name, login_name, current_user.username)
+        log_audit('student_account_create', user=current_user,
+                  entity_type='user', entity_id=user.id,
+                  details=f'студент={student.full_name!r}, логин={login_name!r}, '
+                          f'пароль выдан временный')
     else:
         log.warning('Сброшен пароль ученической записи %s (логин %s) — %s',
                     student.full_name, login_name, current_user.username)
+        log_audit('student_account_reset', user=current_user,
+                  entity_type='user', entity_id=user.id,
+                  details=f'студент={student.full_name!r}, логин={login_name!r}, '
+                          f'пароль сброшен')
 
     # Один раз показываем пароль и отправляем в кабинет самого студента.
     return render_template('password_issued.html', rows=[{
@@ -2923,6 +3112,9 @@ def reset_student_account(id):
 
     log.warning('Сброшен пароль ученической записи %s (логин %s) — %s',
                 user.display_name, user.username, current_user.username)
+    log_audit('student_account_reset', user=current_user, entity_type='user',
+              entity_id=user.id,
+              details=f'логин={user.username!r}, пароль сброшен')
     return render_template('password_issued.html', rows=[{
         'login': user.username, 'name': user.display_name,
         'password': temporary_password,
@@ -2954,10 +3146,16 @@ def toggle_student_account(id):
     if user.is_active:
         log.info('Разблокирована учётная запись %s (логин %s) — %s',
                  user.display_name, user.username, current_user.username)
+        log_audit('student_account_unblock', user=current_user,
+                  entity_type='user', entity_id=user.id,
+                  details=f'логин={user.username!r}')
         flash_msg('success', f'Запись {user.username} разблокирована')
     else:
         log.warning('Заблокирована учётная запись %s (логин %s) — %s',
                     user.display_name, user.username, current_user.username)
+        log_audit('student_account_block', user=current_user,
+                  entity_type='user', entity_id=user.id,
+                  details=f'логин={user.username!r}')
         flash_msg('warning', f'Запись {user.username} заблокирована')
     return redirect(url_for('main.accounts'))
 
@@ -2991,6 +3189,9 @@ def delete_student_account(id):
 
     log.warning('Удалена учётная запись %s (логин %s), студент сохранён — %s',
                 student_name, login_name, current_user.username)
+    log_audit('student_account_delete', user=current_user, entity_type='user',
+              entity_id=id,
+              details=f'логин={login_name!r}, студент={student_name!r}')
     flash_msg('success', f'Запись {login_name} удалена, студент '
                          f'{student_name} сохранён')
     return redirect(url_for('main.accounts'))
@@ -3361,6 +3562,10 @@ def change_password():
             current_user.password_temporary = False
             db.session.commit()
             log.info('Пользователь %s сменил пароль', current_user.username)
+            # Факт смены — да; сам пароль и его хеш — нет (13.4)
+            log_audit('password_change_self', user=current_user,
+                      entity_type='user', entity_id=current_user.id,
+                      details='пароль изменён')
             flash_msg('success', 'Пароль успешно изменён')
             return redirect(request.referrer or home_url())
 
@@ -3558,6 +3763,10 @@ def results_set_final():
             db.session.commit()
             log.info('Итог снят: %s, %s, %s — %s', student.full_name,
                      subject.name, period.name, current_user.username)
+            log_audit('result_remove', user=current_user,
+                      entity_type='period_result', entity_id=result.id,
+                      details=f'студент={student.full_name!r}, '
+                              f'предмет={subject.name!r}, период={period.name!r}')
         flash_msg('success', 'Итоговая оценка снята')
         return redirect(url_for('main.results', group_id=student.group_id,
                                 period_id=period.id))
@@ -3592,6 +3801,18 @@ def results_set_final():
     note = f' (рекомендация была «{recommended}»)' if value != recommended else ''
     log.info('Итог %s: %s, %s, %s%s — %s', 'поставлен' if is_new else 'изменён',
              student.full_name, subject.name, value, note, current_user.username)
+    # Обоснование в аудит дублируем: по нему видно, чем оценка отличается
+    # от рекомендованной, а в самой таблице PeriodResult его легко потерять
+    details = (f'студент={student.full_name!r}, '
+               f'предмет={subject.name!r}, период={period.name!r}, '
+               f'итог={value!r}, рекомендация={recommended!r}, '
+               f'обоснование={justification!r}')
+    if is_new:
+        log_audit('result_set', user=current_user, entity_type='period_result',
+                  entity_id=result.id, details=details)
+    else:
+        log_audit('result_edit', user=current_user, entity_type='period_result',
+                  entity_id=result.id, details=details)
     flash_msg('success',
               f'{student.full_name}, {subject.name}: итог {value}{note}')
     return redirect(url_for('main.results', group_id=student.group_id,
@@ -3696,6 +3917,13 @@ def generate_report():
             filepath = export_to_excel(data, 'students_report')
             log.info('Экспорт отчёта: студенты (%s строк) — %s',
                      len(data), current_user.username)
+            # Выгрузка уводит персональные данные из системы в файл, который
+            # потом гуляет по почте: в журнал — вид отчёта и число строк,
+            # но не сами ФИО
+            log_audit('report_export', user=current_user, entity_type='report',
+                      entity_id='students',
+                      details=f'вид=студенты, строк={len(data)}, '
+                              f'группа={group_id!r}')
             return send_file(filepath, as_attachment=True)
         
         elif report_type == 'grades':
@@ -3723,6 +3951,10 @@ def generate_report():
             filepath = export_to_excel(data, 'grades_report')
             log.info('Экспорт отчёта: оценки (%s строк) — %s',
                      len(data), current_user.username)
+            log_audit('report_export', user=current_user, entity_type='report',
+                      entity_id='grades',
+                      details=f'вид=оценки, строк={len(data)}, группа={group_id!r}, '
+                              f'период={start_date!r}..{end_date!r}')
             return send_file(filepath, as_attachment=True)
         
         flash_msg('error', 'Неверный тип отчета')
@@ -3752,6 +3984,8 @@ def report_students():
             })
         filepath = export_to_excel(data, 'students_report')
         log.info('Экспорт всех студентов (%s строк) — %s', len(data), current_user.username)
+        log_audit('report_export', user=current_user, entity_type='report',
+                  entity_id='students', details=f'вид=все студенты, строк={len(data)}')
         return send_file(filepath, as_attachment=True)
     except Exception as e:
         log.exception('Ошибка экспорта студентов: %s', e)
@@ -3780,6 +4014,10 @@ def report_group(group_id):
         filepath = export_to_excel(data, f'group_{group.name}_report')
         log.info('Экспорт группы «%s» (%s строк) — %s',
                  group.name, len(data), current_user.username)
+        log_audit('report_export', user=current_user, entity_type='report',
+                  entity_id=f'group_{group.id}',
+                  details=f'вид=студенты группы, строк={len(data)}, '
+                          f'группа={group.name!r}')
         return send_file(filepath, as_attachment=True)
     except Exception as e:
         flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
@@ -3828,6 +4066,11 @@ def settings():
 
         if changed:
             log.info('Настройки изменены (%s) — %s', ', '.join(changed), current_user.username)
+            # Список изменённых полей, не их значения: в настройках есть
+            # и такие, что меняют поведение для всех сразу
+            log_audit('settings_update', user=current_user,
+                      entity_type='settings', entity_id=current.id,
+                      details=f'поля={changed!r}')
             message = 'Настройки сохранены'
             if 'пароль' in changed:
                 message += ', пароль обновлён'
@@ -3865,6 +4108,9 @@ def settings_backup():
             filename = create_backup(description=form.description.data or '')
             log.info('Создана резервная копия «%s» — %s',
                      filename, current_user.username)
+            log_audit('backup_create', user=current_user, entity_type='backup',
+                      details=f'файл={filename!r}, '
+                              f'описание={form.description.data!r}')
             flash_msg('success', f'Резервная копия «{filename}» создана')
             return redirect(url_for('main.settings_backup'))
         except Exception as e:
@@ -3884,6 +4130,8 @@ def download_backup_file(filename):
         flash_msg('error', 'Файл резервной копии не найден')
         return redirect(url_for('main.settings_backup'))
     log.info('Скачана резервная копия «%s» — %s', filename, current_user.username)
+    log_audit('backup_download', user=current_user, entity_type='backup',
+              details=f'файл={filename!r}')
     return send_file(path, as_attachment=True)
 
 @main.route('/settings/backup/<filename>/restore', methods=['POST'])
@@ -3899,6 +4147,11 @@ def restore_backup_file(filename):
     try:
         restore_backup(path)
         log.warning('База восстановлена из копии «%s» — %s', filename, current_user.username)
+        # Восстановление заменяет college.db целиком, вместе с таблицей
+        # audit_log. Запись о нём делается после восстановления — иначе она
+        # исчезла бы вместе с той базой, откуда её записали.
+        log_audit('backup_restore', user=current_user, entity_type='backup',
+                  details=f'файл={filename!r}')
         flash_msg('success', 'Данные восстановлены из резервной копии')
     except Exception as e:
         log.exception('Ошибка восстановления из «%s»: %s', filename, e)
@@ -3912,6 +4165,8 @@ def delete_backup_file(filename):
     """Удаление файла резервной копии"""
     if delete_backup(filename):
         log.warning('Удалена резервная копия «%s» — %s', filename, current_user.username)
+        log_audit('backup_delete', user=current_user, entity_type='backup',
+                  details=f'файл={filename!r}')
         flash_msg('success', 'Резервная копия удалена')
     else:
         log.warning('Не удалось удалить резервную копию «%s» — %s', filename, current_user.username)
@@ -3938,6 +4193,13 @@ def settings_import():
                          'пропущено %s — %s',
                          import_type, import_mode, result.get('count'),
                          result.get('skipped', 0), current_user.username)
+                # Имя файла в аудит не пишем: в нём может быть ФИО
+                log_audit('import', user=current_user,
+                          entity_type=import_type,
+                          details=f'режим={import_mode!r}, '
+                                  f'записей={result.get("count")}, '
+                                  f'пропущено={result.get("skipped", 0)}, '
+                                  f'ошибок={result.get("errors_total", 0)}')
                 if result.get('errors_total'):
                     # Часть строк не прошла проверку — отчёт показываем
                     # на странице, а не теряем среди прочих flash-сообщений
@@ -4027,6 +4289,8 @@ def download_logs():
         return redirect(url_for('main.view_logs'))
 
     log.info('Скачан журнал событий — %s', current_user.username)
+    log_audit('logs_download', user=current_user, entity_type='log_file',
+              details=f'файл={os.path.basename(path)!r}')
     return send_file(path, as_attachment=True, mimetype='text/plain',
                      download_name=os.path.basename(path))
 
@@ -4054,7 +4318,107 @@ def clear_logs():
 
     # Запись после очистки: сам факт очистки тоже должен попасть в журнал
     log.warning('Журнал событий очищен вручную — %s', current_user.username)
+    # Аудит переживает очистку app.log: он лежит в базе, а не в файле
+    log_audit('logs_clear', user=current_user, entity_type='log_file',
+              details='файл журнала очищен')
     return {'success': True}
+
+
+# ===================== ЖУРНАЛ ДЕЙСТВИЙ (АУДИТ) =====================
+AUDIT_PAGE_SIZE = 50
+
+
+def _audit_date_arg(name):
+    """Дата из строки запроса в формате YYYY-MM-DD, иначе None.
+
+    Некорректную дату молча игнорируем, а не показываем ошибку: фильтр в
+    журнале не должен ломать страницу из-за опечатки в адресной строке.
+    """
+    raw = (request.args.get(name) or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+@main.route('/audit')
+@staff_required
+def audit_logs():
+    """Журнал действий пользователей (13.3).
+
+    Администратор видит все записи, преподаватель — только свои: чужую
+    выгрузку оценок или сброс чужого пароля ему знать не нужно, а личность
+    остальных сотрудников — тоже. Студент к журналу не допускается вовсе
+    (staff_required отдаёт ему 403), и в списке записанных действий для него
+    есть только вход, выход и смена собственного пароля.
+
+    Записи не удаляются: это единственный след, когда учётная запись
+    нарушителя уже стёрта.
+    """
+    query = AuditLog.query
+
+    if not current_user.is_admin:
+        # Фильтр по автору на сервере, а не «прячем чужие строки в шаблоне»:
+        # иначе количество записей в пагинации показывало бы чужое
+        query = query.filter(AuditLog.user_id == current_user.id)
+
+    action = (request.args.get('action') or '').strip()
+    if action:
+        query = query.filter(AuditLog.action == action)
+
+    entity = (request.args.get('entity') or '').strip()
+    if entity:
+        query = query.filter(AuditLog.entity_type == entity)
+
+    username = (request.args.get('user') or '').strip()
+    if username:
+        query = query.filter(AuditLog.username.ilike(f'%{username}%'))
+
+    date_from = _audit_date_arg('date_from')
+    if date_from:
+        query = query.filter(AuditLog.timestamp >= datetime.combine(
+            date_from, datetime.min.time()))
+    date_to = _audit_date_arg('date_to')
+    if date_to:
+        # Конец дня включительно: без этого «по 15.03» терял бы записи
+        # самой даты после 00:00
+        query = query.filter(AuditLog.timestamp <= datetime.combine(
+            date_to, datetime.max.time()))
+
+    search = (request.args.get('q') or '').strip()[:200]
+    if search:
+        pattern = f'%{search}%'
+        query = query.filter(or_(AuditLog.details.ilike(pattern),
+                                AuditLog.username.ilike(pattern),
+                                AuditLog.ip_address.ilike(pattern)))
+
+    page = request.args.get('page', 1, type=int) or 1
+    entries = (query.order_by(AuditLog.timestamp.desc(), AuditLog.id.desc())
+               .paginate(page=max(1, page), per_page=AUDIT_PAGE_SIZE,
+                         error_out=False))
+
+    # Списки для фильтров — из того же множества записей, которое видит
+    # пользователь: иначе в выпадающем списке были бы чужие значения
+    scope = (AuditLog.query.filter(AuditLog.user_id == current_user.id)
+             if not current_user.is_admin else AuditLog.query)
+    actions = sorted({row[0] for row in
+                      scope.with_entities(AuditLog.action).distinct()
+                      .order_by(AuditLog.action).all()})
+    entities = sorted({row[0] for row in
+                       scope.with_entities(AuditLog.entity_type).distinct()
+                       .order_by(AuditLog.entity_type).all()
+                       if row[0]})
+
+    return render_template(
+        'audit_logs.html', entries=entries, actions=actions, entities=entities,
+        action=action, entity=entity, username=username, search=search,
+        date_from=date_from, date_to=date_to,
+        date_from_raw=request.args.get('date_from', ''),
+        date_to_raw=request.args.get('date_to', ''),
+        labels=AuditLog.ACTION_LABELS, entity_labels=AuditLog.ENTITY_LABELS,
+        is_admin=current_user.is_admin)
 
 # ===================== API =====================
 @main.route('/health')

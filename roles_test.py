@@ -24,7 +24,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from app.init_ import create_app, db
-from app.models import User, Student, Subject, Grade, ScheduleItem
+from app.models import User, Student, Subject, Grade, ScheduleItem, AuditLog
 from app.utils import create_backup
 
 from config import load_env_file
@@ -68,6 +68,9 @@ CHECKS = [
     ('/portal',               403, 403,   200),
     ('/portal/grades',        403, 403,   200),
     ('/portal/attendance',    403, 403,   200),
+    # Фаза 13: журнал действий сотрудникам открыт (свои записи),
+    # студенту — нет
+    ('/audit',                200, 200,   403),
 ]
 
 
@@ -160,9 +163,22 @@ def prepare():
                 'schedule_item': slot.id if slot else None}
 
 
-def cleanup(ids):
+def audit_max_id():
+    """Наибольший id в журнале действий на момент вызова."""
+    with app.app_context():
+        return db.session.query(db.func.max(AuditLog.id)).scalar() or 0
+
+
+def cleanup(ids, audit_base=None):
     """Возвращает базу к исходному состоянию."""
     with app.app_context():
+        # Журнал действий: записи о входах тестовых учётных записей. Их
+        # авторов мы сейчас удаляем, поэтому в журнале остались бы записи,
+        # ссылающиеся на несуществующих пользователей, — при разборе
+        # инцидента это выглядит как след чужой правки
+        for entry in AuditLog.query.filter(AuditLog.id > (audit_base or 0)).all():
+            db.session.delete(entry)
+
         user = User.query.filter_by(username=ids['teacher_name']).first()
         if user:
             for subject in Subject.query.filter_by(teacher_id=user.id).all():
@@ -194,6 +210,7 @@ def main():
     backup = create_backup('перед проверкой ролей')
     print(f'ℹ️  Резервная копия: {backup if isinstance(backup, str) else "не создана"}')
 
+    audit_base = audit_max_id()
     ids = prepare()
     print(f'ℹ️  Преподаватель: {ids["teacher_name"]}, предметов: {len(ids["subject_ids"])}')
     print(f'ℹ️  Студент: {ids["student_login"]}\n')
@@ -326,7 +343,7 @@ def main():
                             f'студент /student/{other_student.id} → {resp.status_code}')
 
     finally:
-        cleanup(ids)
+        cleanup(ids, audit_base)
 
     print()
     if failures:

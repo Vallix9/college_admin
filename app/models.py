@@ -551,6 +551,165 @@ class GradeHistory(db.Model):
         return f'<GradeHistory grade={self.grade_id} {self.action}>'
 
 
+class AuditLog(db.Model):
+    """Журнал действий пользователей (аудит).
+
+    13.1: фиксирует все изменяющие операции: кто (пользователь + роль),
+    что (действие, сущность, entity_id), когда (timestamp), откуда (IP,
+    user-agent). Пароли и хеши в аудит не попадают — только факт операции.
+
+    username хранится отдельно от user_id намеренно: учётную запись можно
+    удалить, а запись о том, кто именно её удалил или что сбросил, обязана
+    остаться читаемой. Иначе после удаления сотрудника в журнале было бы
+    « user_id=7» без единого имени.
+
+    entity_id — строка, а не число: журналируются не только строки таблиц
+    (оценка, студент), но и файлы (резервная копия, ведомость с паролями)
+    и настройки, у которых идентификатора-числа просто нет.
+    """
+
+    __tablename__ = 'audit_log'
+
+    ACTION_LABELS = {
+        'login': 'Вход в систему',
+        'login_failed': 'Неудачная попытка входа',
+        'login_blocked': 'Вход в отключённую учётную запись',
+        'logout': 'Выход из системы',
+        'password_change_self': 'Смена собственного пароля',
+        'student_create': 'Добавление студента',
+        'student_edit': 'Изменение карточки студента',
+        'student_delete': 'Удаление студента',
+        'student_account_create': 'Выдача учётной записи студента',
+        'student_account_reset': 'Сброс пароля ученической записи',
+        'student_account_block': 'Блокировка ученической записи',
+        'student_account_unblock': 'Разблокировка ученической записи',
+        'student_account_delete': 'Удаление ученической записи',
+        'accounts_issue': 'Массовая выдача учётных записей',
+        'staff_create': 'Создание сотрудника',
+        'staff_edit': 'Изменение сотрудника',
+        'staff_delete': 'Удаление сотрудника',
+        'staff_password_reset': 'Сброс пароля сотрудника',
+        'group_create': 'Добавление группы',
+        'group_edit': 'Изменение группы',
+        'group_delete': 'Удаление группы',
+        'subject_create': 'Добавление предмета',
+        'subjects_bulk_create': 'Массовое добавление предметов',
+        'subject_edit': 'Изменение предмета',
+        'subject_delete': 'Удаление предмета',
+        'period_create': 'Добавление периода',
+        'period_edit': 'Изменение периода',
+        'period_delete': 'Удаление периода',
+        'periods_generate': 'Автосоздание периодов',
+        'grade_create': 'Выставление оценки',
+        'grade_delete': 'Удаление оценки',
+        'journal_grade_create': 'Выставление оценок (журнал)',
+        'journal_grade_edit': 'Правка оценки (журнал)',
+        'journal_grade_delete': 'Удаление оценки (журнал)',
+        'attendance_create': 'Отметка пропуска',
+        'attendance_edit': 'Изменение пропуска',
+        'attendance_delete': 'Удаление пропуска',
+        'attendance_bulk': 'Массовая отметка пропусков',
+        'schedule_item_create': 'Добавление занятия в расписание',
+        'schedule_day_fill': 'Заполнение дня расписания',
+        'schedule_item_delete': 'Удаление занятия из расписания',
+        'lessons_mark': 'Отметка состоявшихся занятий',
+        'result_set': 'Выставление итога',
+        'result_edit': 'Изменение итога',
+        'result_remove': 'Снятие итога',
+        'settings_update': 'Изменение настроек',
+        'backup_create': 'Создание резервной копии',
+        'backup_restore': 'Восстановление из резервной копии',
+        'backup_delete': 'Удаление резервной копии',
+        'backup_download': 'Скачивание резервной копии',
+        'import': 'Импорт данных',
+        'report_export': 'Выгрузка отчёта в Excel',
+        'logs_download': 'Скачивание журнала событий',
+        'logs_clear': 'Очистка журнала событий',
+        'credentials_download': 'Скачивание ведомости с паролями',
+    }
+
+    ENTITY_LABELS = {
+        'user': 'Учётная запись',
+        'student': 'Студент',
+        'group': 'Группа',
+        'subject': 'Предмет',
+        'grade': 'Оценка',
+        'period': 'Учебный период',
+        'period_result': 'Итоговая оценка',
+        'attendance': 'Пропуск',
+        'schedule_item': 'Занятие',
+        'lesson_date': 'Отметка занятия',
+        'settings': 'Настройки',
+        'backup': 'Резервная копия',
+        'report': 'Отчёт',
+        'credentials_file': 'Ведомость с паролями',
+        'log_file': 'Файл журнала',
+        'students': 'Студенты',
+        'grades': 'Оценки',
+        'periods': 'Периоды',
+        'groups': 'Группы',
+        'subjects': 'Предметы',
+        'teachers': 'Преподаватели',
+        'staff': 'Сотрудники',
+        'attendance_all': 'Пропуски',
+        'unknown': 'Неизвестный тип',
+    }
+
+    # Кто: логин дублируется, чтобы запись пережила удаление учётной записи
+    id = db.Column(db.Integer, primary_key=True)
+    # ondelete='SET NULL' — при удалении сотрудника обнуляется только ссылка,
+    # а сама запись с логином остаётся. Простое ограничение без этого
+    # превращало бы удаление в ошибку целостности, как только БД начнёт
+    # проверять внешние ключи.
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'),
+                        index=True, nullable=True)
+    username = db.Column(db.String(150), index=True)
+    role = db.Column(db.String(20))
+    # Что: действие, сущность и её идентификатор (число или имя файла)
+    action = db.Column(db.String(100), nullable=False, index=True)
+    entity_type = db.Column(db.String(50), index=True)
+    entity_id = db.Column(db.String(64))
+    details = db.Column(db.Text)
+    # Откуда и когда
+    ip_address = db.Column(db.String(64), index=True)
+    user_agent = db.Column(db.String(255))
+    timestamp = db.Column(db.DateTime, default=now, nullable=False, index=True)
+
+    user = db.relationship('User', foreign_keys=[user_id], lazy=True)
+
+    __table_args__ = (
+        db.Index('ix_audit_action_time', 'action', 'timestamp'),
+        db.Index('ix_audit_user_time', 'user_id', 'timestamp'),
+    )
+
+    @property
+    def action_label(self):
+        """Человеческое название действия для интерфейса."""
+        return self.ACTION_LABELS.get(self.action, self.action)
+
+    @property
+    def entity_label(self):
+        """Название сущности, к которой относится действие."""
+        if not self.entity_type:
+            return '—'
+        return self.ENTITY_LABELS.get(self.entity_type, self.entity_type)
+
+    @property
+    def actor(self):
+        """Логин автора из снимка в записи.
+
+        К user здесь не обращаемся намеренно: поле username заполняется при
+        записи, и обращение к relationship в шаблоне дало бы отдельный
+        SELECT на каждую строку таблицы журнала.
+        """
+        return self.username or '—'
+
+    def __repr__(self):
+        return (f'<AuditLog id={self.id} action={self.action} '
+                f'entity={self.entity_type}:{self.entity_id} '
+                f'user={self.username or self.user_id}>')
+
+
 class PeriodResult(db.Model):
     """Итоговая оценка за период: пара «студент + предмет + период».
 

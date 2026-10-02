@@ -2,6 +2,7 @@
 
 Запуск:  python query_count.py
 """
+import atexit
 import os
 import re
 import sys
@@ -13,7 +14,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from sqlalchemy import event
 
-from app.init_ import create_app
+from app.init_ import create_app, db
+from app.models import AuditLog
 from config import load_env_file
 
 load_env_file()
@@ -23,10 +25,28 @@ app.config['TESTING'] = True
 
 with app.app_context():
     engine = app.extensions['sqlalchemy'].engine
+    # Вход сам пишет запись в журнал действий: без сброса прогон оставлял бы
+    # её в рабочей базе, и при разборе инцидента она выглядела бы как
+    # настоящий вход преподавателя, которого не было
+    audit_base = db.session.query(db.func.max(AuditLog.id)).scalar() or 0
+
+
+def clean_audit_log():
+    with app.app_context():
+        for entry in AuditLog.query.filter(AuditLog.id > audit_base).all():
+            db.session.delete(entry)
+        db.session.commit()
+
+
+atexit.register(clean_audit_log)
 
 PAGES = ['/', '/students', '/groups', '/subjects', '/grades', '/reports', '/settings',
          '/periods', '/schedule', '/journal',
-         '/journal?mode=subjects', '/attendance', '/results', '/accounts']
+         '/journal?mode=subjects', '/attendance', '/results', '/accounts',
+         # Фаза 13: журнал действий. Страница обязана обходиться постоянным
+         # числом запросов: автор в каждой строке берётся из снимка в самой
+         # записи, и обращение к user в шаблоне дало бы SELECT на строку
+         '/audit', '/audit?page=2']
 
 with app.test_client() as client:
     html = client.get('/login').get_data(as_text=True)

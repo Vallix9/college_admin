@@ -30,6 +30,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from app.init_ import create_app, db
 from app.models import (User, Group, Student, Subject, Grade, GradeHistory,
+                        AuditLog,
                         AcademicPeriod, ScheduleItem, LessonDate,
                         AttendanceRecord)
 from app.utils import parse_grade_values, average_grade, grade_distribution
@@ -87,9 +88,22 @@ def page_text(html):
     return ' '.join(re.sub(r'<[^>]+>', ' ', without_scripts).split())
 
 
+
+
+def _audit_max_id():
+    """Наибольший id в журнале действий — точка отсчёта для очистки.
+
+    Вызывается из snapshot(), где контекст приложения уже открыт: свой
+    контекст здесь только развёл бы читателя по лишней сессии.
+    """
+    return db.session.query(db.func.max(AuditLog.id)).scalar() or 0
+
+
 def snapshot():
     with app.app_context():
         return {
+            'audit_max_id': _audit_max_id(),
+
             'grades': [{'id': g.id, 'student': g.student_id,
                         'subject': g.subject_id, 'value': g.grade_value,
                         'type': g.grade_type, 'date': g.date,
@@ -158,6 +172,13 @@ def restore(state):
                 new_value=data['new'], action=data['action'],
                 changed_by=data['by'], comment=data['comment']))
         db.session.commit()
+        # Журнал действий (Фаза 13) тест тоже наполняет: без сброса каждый
+        # прогон оставлял бы в рабочей базе записи о тестовых входах
+        for entry in AuditLog.query.filter(
+                AuditLog.id > state['audit_max_id']).all():
+            db.session.delete(entry)
+        db.session.commit()
+
 
 
 TEST_TEACHER = 'test-teacher-journal'

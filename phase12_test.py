@@ -26,6 +26,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from app.init_ import create_app, db
 from app.models import (User, Group, Student, Grade, Subject, AcademicPeriod,
+                        AuditLog,
                         AttendanceRecord, PeriodResult)
 
 from config import load_env_file
@@ -115,9 +116,19 @@ def grade_chips(html):
     return re.findall(r'grade-chip[^>]*>\s*([^<\s]+)', html)
 
 
+def _audit_max_id():
+    """Наибольший id в журнале действий — точка отсчёта для очистки.
+
+    Вызывается из snapshot(), где контекст приложения уже открыт: свой
+    контекст здесь только развёл бы читателя по лишней сессии.
+    """
+    return db.session.query(db.func.max(AuditLog.id)).scalar() or 0
+
+
 def snapshot():
     with app.app_context():
         return {
+            'audit_max_id': _audit_max_id(),
             'users': [{'id': u.id, 'username': u.username,
                        'password_hash': u.password_hash, 'role': u.role,
                        'created_by': u.created_by, 'created_at': u.created_at,
@@ -183,6 +194,12 @@ def restore(state):
                 if row.id not in state[key]:
                     db.session.delete(row)
             db.session.flush()
+        db.session.commit()
+        # Журнал действий (Фаза 13) тест тоже наполняет: без сброса каждый
+        # прогон оставлял бы в рабочей базе записи о тестовых входах
+        for entry in AuditLog.query.filter(
+                AuditLog.id > state['audit_max_id']).all():
+            db.session.delete(entry)
         db.session.commit()
 
 

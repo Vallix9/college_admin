@@ -125,6 +125,128 @@ def get_logger(name=None):
     return logging.getLogger(name or LOGGER_NAME)
 
 
+# ===================== АУДИТ (13.2) =====================
+# Поля, значения которых нельзя писать в журнал: пароль, его хеш и любые
+# поля, названные этими словами. Список используется в scrub_audit_details
+# перед записью, а не при просмотре — «забыть удалить» невозможно.
+AUDIT_FORBIDDEN_KEYS = {
+    'password', 'new_password', 'old_password', 'current_password',
+    'confirm_password', 'password_hash', 'password_temporary',
+    'pass', 'pwd', 'passwd', 'secret', 'token', 'csrf_token',
+    'hash', 'password_plain', 'temporary_password',
+}
+
+
+def scrub_audit_details(details):
+    """Убирает пароли и хеши из details перед записью в аудит.
+
+    Принимает строку, dict или None. Для dict удаляет опасные ключи
+    полностью и заменяет их на «***», чтобы было видно, что значение
+    было. Для строки удаляет всё, что похоже на хеш пароля
+    (pbkdf2:salt...), и пароль=... в свободном тексте.
+    """
+    if details is None:
+        return None
+
+    if isinstance(details, dict):
+        clean = {}
+        for key, value in details.items():
+            if str(key).lower() in AUDIT_FORBIDDEN_KEYS:
+                clean[key] = '***'
+            else:
+                clean[key] = scrub_audit_details(value)
+        return clean
+
+    text = str(details)
+    # Хеш вида pbkdf2:sha256:260000$... — не должен попасть в журнал
+    text = re.sub(r'pbkdf2:[^\s,;"]+', '***', text)
+    # Пароль в свободном тексте: password=X или пароль=X
+    text = re.sub(
+        r'(?i)\b(парол[ья]|password)\s*[:=]\s*\S+',
+        lambda m: m.group(0).split(':')[0].split('=')[0] + '=***', text)
+    return text
+
+
+def format_audit_details(details):
+    """Готовит details к записи в колонку Text.
+
+    dict хранится в JSON: в Python repr от словаря значения теряют тип
+    («5» и 5 неразличимы, кавычки путаются), а по JSON в журнале потом
+    можно искать по конкретному полю. Строка пишется как есть.
+    """
+    if details is None:
+        return None
+    clean = scrub_audit_details(details)
+    if isinstance(clean, dict):
+        try:
+            return json.dumps(clean, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(clean)
+    return str(clean)
+
+
+def log_audit(action, user=None, entity_type=None, entity_id=None,
+              details=None, ip_address=None, user_agent=None):
+    """Записывает действие в таблицу audit_log.
+
+    user — объект User (flask_login current_user) или None (аноним).
+    IP и user-agent берутся из Flask-запроса, если не переданы явно.
+    details — строка или dict; пароли и хеши вычищаются из них всегда.
+
+    Запись идёт своей транзакцией, поэтому вызывать её надо ПОСЛЕ
+    db.session.commit() бизнес-операции: иначе аудит закоммитит ещё не
+    сохранённые изменения вместе с собой. Ошибка записи аудита не должна
+    ломать основную операцию — исключение глушится и уходит в файловый
+    журнал, но сессию откатываем: после неудачного commit() она не
+    пригодна для дальнейшей работы.
+    """
+    try:
+        from app.init_ import db as _db
+        from app.models import AuditLog
+
+        # Flask-запрос доступен только в контексте запроса
+        if ip_address is None or user_agent is None:
+            try:
+                from flask import request
+                if ip_address is None:
+                    ip_address = request.remote_addr
+                if user_agent is None:
+                    user_agent = (request.user_agent.string or '')[:255]
+            except Exception:
+                # Вне контекста запроса (скрипты, тесты) — пусто
+                pass
+
+        # Логин копируется в запись: user_id обнулится при удалении
+        # сотрудника, а кто именно действовал — должно остаться видно
+        username = getattr(user, 'username', None)
+
+        entry = AuditLog(
+            user_id=getattr(user, 'id', None),
+            username=(username or '')[:150] or None,
+            role=getattr(user, 'role', None),
+            action=str(action)[:100],
+            entity_type=(str(entity_type) if entity_type else None),
+            details=format_audit_details(details),
+            ip_address=(ip_address or '')[:64] or None,
+            user_agent=(user_agent or '')[:255] or None,
+        )
+        if entity_type:
+            entry.entity_type = entry.entity_type[:50] or None
+        if entity_id is not None:
+            entry.entity_id = str(entity_id)[:64]
+        _db.session.add(entry)
+        _db.session.commit()
+    except Exception as exc:
+        # Сбой аудита не должен откатывать бизнес-операцию, но оставлять
+        # сессию в сломанном состоянии тоже нельзя
+        get_logger().error('Не удалось записать в аудит «%s»: %s', action, exc)
+        try:
+            from app.init_ import db as _db
+            _db.session.rollback()
+        except Exception:
+            pass
+
+
 def get_log_file_path():
     return os.path.join(LOG_DIR, LOG_FILENAME)
 

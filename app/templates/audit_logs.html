@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}Журнал действий{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('main.dashboard') }}">Главная</a></li>
+<li class="breadcrumb-item active" aria-current="page">Журнал действий</li>
+{% endblock %}
+
+{% block page_title %}
+<i class="bi bi-shield-check me-2"></i>Журнал действий
+{% endblock %}
+
+{% block page_subtitle %}
+{% if is_admin %}
+Кто, что и когда менял в системе. Записи не удаляются.
+{% else %}
+Ваши действия в системе. Записи не удаляются.
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+    .audit-details {
+        font-family: 'Courier New', monospace;
+        font-size: 0.8125rem;
+        color: #495057;
+        word-break: break-word;
+    }
+    .audit-empty {
+        padding: 8px 0;
+    }
+    .audit-filter .form-label {
+        font-size: 0.8125rem;
+        margin-bottom: 0.15rem;
+        color: #6c757d;
+    }
+    /* Метка роли: у входа и выхода она «информационная», у изменений —
+       предупреждающая, у удалений — опасная */
+    .role-badge {
+        font-size: 0.7rem;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+    }
+    .role-admin { background-color: #f8d7da; color: #842029; }
+    .role-teacher { background-color: #d1ecf1; color: #0c5460; }
+    .role-student { background-color: #fff3cd; color: #856404; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <form method="GET" action="{{ url_for('main.audit_logs') }}">
+            <div class="row g-2 audit-filter">
+                <div class="col-md-4">
+                    <label class="form-label" for="fAction">Действие</label>
+                    <select class="form-select form-select-sm" id="fAction" name="action">
+                        <option value="">все действия</option>
+                        {% for value in actions %}
+                        <option value="{{ value }}" {{ 'selected' if action == value }}>
+                            {{ labels.get(value, value) }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="fEntity">Объект</label>
+                    <select class="form-select form-select-sm" id="fEntity" name="entity">
+                        <option value="">все объекты</option>
+                        {% for value in entities %}
+                        <option value="{{ value }}" {{ 'selected' if entity == value }}>
+                            {{ entity_labels.get(value, value) }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% if is_admin %}
+                <div class="col-md-2">
+                    <label class="form-label" for="fUser">Пользователь</label>
+                    <input type="text" class="form-control form-control-sm" id="fUser"
+                           name="user" value="{{ username }}"
+                           placeholder="логин">
+                </div>
+                {% endif %}
+                <div class="col-md-3">
+                    <label class="form-label" for="fSearch">Поиск</label>
+                    <input type="text" class="form-control form-control-sm" id="fSearch"
+                           name="q" value="{{ search }}"
+                           placeholder="детали, логин, IP">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="fFrom">С даты</label>
+                    <input type="date" class="form-control form-control-sm"
+                           id="fFrom" name="date_from" value="{{ date_from_raw }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="fTo">По дату</label>
+                    <input type="date" class="form-control form-control-sm"
+                           id="fTo" name="date_to" value="{{ date_to_raw }}">
+                </div>
+                <div class="col-md-3 d-flex align-items-end gap-2">
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <i class="bi bi-funnel"></i> Применить
+                    </button>
+                    <a href="{{ url_for('main.audit_logs') }}"
+                       class="btn btn-outline-secondary btn-sm">Сброс</a>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-sm mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th width="150">Время</th>
+                        <th width="150">Пользователь</th>
+                        <th width="80">Роль</th>
+                        <th width="200">Действие</th>
+                        <th width="160">Объект</th>
+                        <th>Подробности</th>
+                        <th width="120">IP</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in entries.items %}
+                    <tr>
+                        <td class="text-nowrap small">
+                            {{ entry.timestamp.strftime('%d.%m.%Y %H:%M:%S') }}
+                        </td>
+                        <td class="small text-nowrap">
+                            {{ entry.actor }}
+                        </td>
+                        <td>
+                            <span class="badge role-badge role-{{ entry.role }}">
+                                {{ entry.role or '—' }}
+                            </span>
+                        </td>
+                        <td class="small">{{ entry.action_label }}</td>
+                        <td class="small">
+                            {{ entry.entity_label }}
+                            {% if entry.entity_id %}
+                            <span class="text-muted">#{{ entry.entity_id }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="audit-empty">
+                            {% if entry.details %}
+                            <span class="audit-details">{{ entry.details }}</span>
+                            {% else %}
+                            <span class="text-muted small">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="small text-muted text-nowrap">{{ entry.ip_address or '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center py-5">
+                            <i class="bi bi-shield-x display-4 text-muted mb-3"></i>
+                            <h5 class="text-muted">Записей нет</h5>
+                            <p class="text-muted mb-0">
+                                {% if search or action or entity or username or date_from or date_to %}
+                                По заданным условиям ничего не найдено.
+                                {% else %}
+                                Действия появятся здесь автоматически.
+                                {% endif %}
+                            </p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <small class="text-muted">
+            {% if entries.total %}
+                Показано {{ entries.first }}–{{ entries.last }} из {{ entries.total }}
+            {% else %}
+                Нет записей по этим условиям
+            {% endif %}
+        </small>
+        {% if entries.pages > 1 %}
+        <nav aria-label="Страницы журнала действий">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item {{ 'disabled' if entries.page <= 1 }}">
+                    <a class="page-link" href="{{ url_for('main.audit_logs',
+                        page=entries.page - 1, action=action or None,
+                        entity=entity or None, user=username or None,
+                        q=search or None, date_from=date_from_raw or None,
+                        date_to=date_to_raw or None) }}">Назад</a>
+                </li>
+                {% for p in entries.iter_pages(left_edge=1, left_current=2,
+                                                right_current=2, right_edge=1) %}
+                    {% if p %}
+                    <li class="page-item {{ 'active' if p == entries.page }}">
+                        <a class="page-link" href="{{ url_for('main.audit_logs',
+                            page=p, action=action or None, entity=entity or None,
+                            user=username or None, q=search or None,
+                            date_from=date_from_raw or None,
+                            date_to=date_to_raw or None) }}">{{ p }}</a>
+                    </li>
+                    {% else %}
+                    <li class="page-item disabled"><span class="page-link">…</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {{ 'disabled' if entries.page >= entries.pages }}">
+                    <a class="page-link" href="{{ url_for('main.audit_logs',
+                        page=entries.page + 1, action=action or None,
+                        entity=entity or None, user=username or None,
+                        q=search or None, date_from=date_from_raw or None,
+                        date_to=date_to_raw or None) }}">Вперёд</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+</div>
+
+<div class="alert alert-light border mt-3 mb-0 small">
+    <i class="bi bi-info-circle me-1"></i>
+    Журнал действий хранится в базе и не зависит от файла системного журнала:
+    очистка <code>app.log</code> не стирает его. Пароли и их хеши в записи не
+    попадают — фиксируется только факт операции.
+    Записи доступны только администратору (все) и сотруднику (свои);
+    студент к журналу не допускается.
+</div>
+{% endblock %}

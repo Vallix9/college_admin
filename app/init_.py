@@ -132,6 +132,13 @@ def nav_items_for(user):
          'label': 'Отчёты'},
     ]
 
+    # Преподавателю журнал действий нужен, чтобы проверить свои записи
+    # (кто и когда поставил оценку), но чужи записи role_required и фильтр
+    # в самом маршруте ему не показывают
+    if not is_admin:
+        items.append({'endpoint': 'main.audit_logs', 'icon': 'bi-shield-check',
+                      'label': 'Мои действия'})
+
     if is_admin:
         items.append({'endpoint': 'main.staff', 'icon': 'bi-person-gear',
                       'label': 'Сотрудники'})
@@ -153,4 +160,6 @@ def system_items_for(user):
          'label': 'Импорт данных'},
         {'endpoint': 'main.view_logs', 'icon': 'bi-journal-text',
          'label': 'Журнал событий'},
+        {'endpoint': 'main.audit_logs', 'icon': 'bi-shield-check',
+         'label': 'Журнал действий'},
     ]

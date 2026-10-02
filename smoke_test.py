@@ -10,6 +10,7 @@
 проверки проходили бы, не проверив ничего.
 """
 
+import atexit
 import os
 import re
 import sys
@@ -21,7 +22,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from app.init_ import create_app, db
 from app.models import (User, Student, Group, Subject, Grade,
-                        AcademicPeriod, ScheduleItem)
+                        AcademicPeriod, ScheduleItem, AuditLog)
 
 from config import load_env_file
 
@@ -97,6 +98,12 @@ PAGES = [
     ('/settings/logs', 'журнал событий'),
     ('/settings/logs?level=ERROR', 'журнал: только ошибки'),
     ('/settings/logs?q=%D0%98%D0%B2%D0%B0%D0%BD', 'журнал: поиск'),
+    # Фаза 13: журнал действий в базе. Он пуст на чистой базе, поэтому
+    # проверяется отрисовка страницы и фильтров, а не содержимое
+    ('/audit', 'журнал действий'),
+    ('/audit?action=login', 'журнал действий: фильтр по действию'),
+    ('/audit?user=admin&q=&date_from=&date_to=', 'журнал действий: фильтры'),
+    ('/audit?page=2', 'журнал действий: вторая страница'),
     ('/settings/export-template/students', 'шаблон импорта: студенты'),
     ('/settings/export-template/grades', 'шаблон импорта: оценки'),
     ('/settings/export-template/groups', 'шаблон импорта: группы'),
@@ -161,7 +168,30 @@ def check_pages(client, pages, failures):
             print(f'✓ {url:42} {title:32} {status}')
 
 
+def audit_max_id():
+    """Наибольший id в журнале действий на момент вызова."""
+    with app.app_context():
+        return db.session.query(db.func.max(AuditLog.id)).scalar() or 0
+
+
+def clean_audit_log(audit_base):
+    """Убрать записи журнала, созданные прогоном.
+
+    Smoke ничего не меняет, но входы и скачивание файлов пишутся в журнал
+    действий. Оставленные записи об обходе всех страниц выглядели бы при
+    разборе инцидента как след настоящей работы. Регистрируется в atexit,
+    чтобы убираться и при раннем выходе, и при падении: неудачный вход не
+    должен оставлять в журнале запись о попытке, которой не было.
+    """
+    with app.app_context():
+        for entry in AuditLog.query.filter(AuditLog.id > audit_base).all():
+            db.session.delete(entry)
+        db.session.commit()
+
+
 def main():
+    audit_base = audit_max_id()
+    atexit.register(clean_audit_log, audit_base)
     failures = []
 
     with app.test_client() as client:
