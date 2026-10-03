@@ -63,32 +63,42 @@
 
 ## Фаза 0. Окружение и зависимости
 
-- [ ] 0.1 Создать `venv`, активировать.
-- [ ] 0.2 Переписать `requirements.txt` на совместимый набор: Flask 3.x,
+- [x] 0.1 Создать `venv`, активировать.
+- [x] 0.2 Переписать `requirements.txt` на совместимый набор: Flask 3.x,
       Flask-SQLAlchemy 3.1.x, Flask-WTF 1.2.x, WTForms, Flask-Login, SQLAlchemy 2.0.x,
       Werkzeug 3.x, pandas, openpyxl, python-dotenv, email-validator, **psutil**
       (нужен `utils.get_system_stats`), waitress (продакшн-сервер для Docker).
       Убрать жёсткий `Werkzeug==2.3.7` — он конфликтует с Flask 3.
-- [ ] 0.3 `.env.example` (SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD, DATABASE_URL,
+- [x] 0.3 `.env.example` (SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD, DATABASE_URL,
       HOST, PORT, FLASK_DEBUG), `.gitignore` дополнен.
-- [ ] 0.4 Установить зависимости, `pip check`, зафиксировать версии.
-- [ ] **КТ:** `python -c "import app"` без ошибок.
+- [x] 0.4 Установить зависимости, `pip check`, зафиксировать версии.
+- [x] **КТ:** `python -c "import app"` без ошибок.
+    - Финальная сверка: `pip check` — конфликтов нет; `import app` и
+      остальные модули импортируются; версии в `requirements.txt`
+      совпадают с установленными.
 
 ## Фаза 1. Блокирующие ошибки (сейчас не стартует)
 
-- [ ] 1.1 `app/routes.py:3` — заменить удалённый в Werkzeug 3 `url_parse`
+- [x] 1.1 `app/routes.py:3` — заменить удалённый в Werkzeug 3 `url_parse`
       на `urllib.parse.urlparse` с проверкой `next` (не пускать абсолютные URL и `//host`).
-- [ ] 1.2 Добавить 4 отсутствующих роута, на которые ссылаются шаблоны:
+- [x] 1.2 Добавить 4 отсутствующих роута, на которые ссылаются шаблоны:
       `settings_backup`, `settings_import`, `delete_backup_file`, `restore_backup_file`
       (сейчас `BuildError` → 500).
-- [ ] 1.3 `create_admin.py` — импорт `from app.init_ import db, create_app`.
-- [ ] 1.4 `app/init_.py` — вызвать `Config.init_app(app)`: папки `uploads/`, `backups/`,
+- [x] 1.3 `create_admin.py` — импорт `from app.init_ import db, create_app`.
+- [x] 1.4 `app/init_.py` — вызвать `Config.init_app(app)`: папки `uploads/`, `backups/`,
       `exports/`, `logs/` сейчас не создаются.
-- [ ] 1.5 Свести `init_db.py` / `migrations.py` к одному скрипту; сид + админ из `.env`.
+- [x] 1.5 Свести `init_db.py` / `migrations.py` к одному скрипту; сид + админ из `.env`.
       Привести `zapusk.txt` к фактическим именам файлов.
-- [ ] 1.6 Docker: `run.py` слушает 8080, `docker-compose.yml` пробрасывает 5000 — свести
+- [x] 1.6 Docker: `run.py` слушает 8080, `docker-compose.yml` пробрасывает 5000 — свести
       к одному значению из конфигурации.
-- [ ] **КТ:** `python init_db.py` → `python run.py` → вход работает.
+- [x] **КТ:** `python init_db.py` → `python run.py` → вход работает.
+    - Финальная сверка: `migrations.py` и `init_db.py` повторно не падают;
+      живой прогон «миграции → сид → `run.py` → вход администратора»
+      прошёл на пустой базе (11/11 проверок). Разделение на два скрипта
+      сохранено осознанно: `migrations.py` вызывает в том числе
+      production-старт Docker, а `init_db.py` нужен один раз.
+    - 4 роута из 1.2 на месте, ссылок на несуществующие эндпоинты нет
+      (проверяется в `tests/test_routes.py`).
 
 ## Фаза 2. Логирование
 
@@ -108,9 +118,12 @@
       `extract_message`, `count_logs_by_level`, `get_log_file_size`,
       `get_log_file_mtime`) перенесены из контекстного процессора в
       `utils.py` — иначе они смотрели в `app.log` в корне, а не в `logs/`.
-- [ ] **КТ:** записи появляются в `logs/app.log` ✔, ротация проверена ✔,
+- [x] **КТ:** записи появляются в `logs/app.log` ✔, ротация проверена ✔,
       счётчики уровней работают ✔. Страница журнала логов (`/view_logs`)
       требует роут — см. 4.4.
+    - Финальная сверка: `app.log` создаётся, формат
+      `%(asctime)s [%(levelname)s] %(message)s`, уровни пишутся,
+      при переполнении появляется `app.log.1` (2 МБ × 5).
 
 ## Фаза 3. Исправление логики и качества кода
 
