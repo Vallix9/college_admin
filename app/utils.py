@@ -12,9 +12,15 @@ import pandas as pd
 from datetime import date, datetime
 
 BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-BACKUP_DIR = os.path.join(BASEDIR, 'backups')
-EXPORT_DIR = os.path.join(BASEDIR, 'exports')
-LOG_DIR = os.path.join(BASEDIR, 'logs')
+# Каталоги берутся из переменных окружения, как и в config.py. Раньше здесь
+# были жёстко прописаны пути рядом с BASEDIR, а config.py объявлял свои
+# BACKUP_FOLDER/EXPORT_FOLDER: две независимые правды, и настройка папки
+# молча ни на что не влияла — файлы всё равно оказывались в exports/.
+BACKUP_DIR = os.environ.get('BACKUP_FOLDER') or \
+    os.path.join(BASEDIR, 'backups')
+EXPORT_DIR = os.environ.get('EXPORT_FOLDER') or \
+    os.path.join(BASEDIR, 'exports')
+LOG_DIR = os.environ.get('LOG_FOLDER') or os.path.join(BASEDIR, 'logs')
 DB_PATH = os.path.join(BASEDIR, 'college.db')
 
 LOGGER_NAME = 'college'
@@ -863,13 +869,27 @@ def restore_backup(backup_path):
         # Извлекаем только college.db, защищаясь от подстановки путей
         # (zip-slip) внутри архива. Остальные файлы не трогаем — иначе
         # архив мог бы записать что угодно в каталог с базой.
+        # Пишем именно в тот файл, который открыт приложением (get_db_path),
+        # а не в «college.db» рядом с ним: при DATABASE_URL, указывающем на
+        # другое имя, восстановление уходило в соседний файл, и данные
+        # «восстанавливались» в никуда.
         db_dir = os.path.dirname(db_path)
-        target = os.path.abspath(os.path.join(db_dir, 'college.db'))
+        target = os.path.abspath(db_path)
         if os.path.commonpath([target, db_dir]) != db_dir:
             raise ValueError('Некорректный путь внутри архива')
 
         with zipf.open('college.db') as src, open(target, 'wb') as dst:
             shutil.copyfileobj(src, dst)
+
+    # Файл базы подменён, а SQLite продолжает держать старый открытый файл
+    # и кеш страниц: без переоткрытия соединения приложение до перезапуска
+    # читало бы прежние данные и «восстановление» выглядело бы сломанным.
+    try:
+        from app.models import db
+        db.session.remove()
+        db.engine.dispose()
+    except Exception as exc:  # pragma: no cover - только при отладке
+        print(f'Не удалось переоткрыть соединение с базой: {exc}')
 
     return True
 
@@ -897,8 +917,12 @@ def _cell(row, index, default=''):
     ячейка пуста, как float. Тогда номер зачётки '9900001' превратился бы в
     '9900001.0'. Целые float приводим к int, чтобы идентификаторы и годы
     сохранялись в том виде, в каком их вводили.
+
+    Обращение через iloc, а не row[index]: целочисленный ключ в Series
+    pandas трактует как имя метки, и в новых версиях вместо ячейки вернулось
+    бы пустое значение — молчаливый импорт пустых записей.
     """
-    value = row[index]
+    value = row.iloc[index]
     if value is None:
         return default
     if isinstance(value, float):
@@ -989,7 +1013,7 @@ SETTINGS_ALIASES = {
 
 def import_students(df, import_mode, errors):
     """Импорт студентов. Возвращает число добавленных/обновлённых записей."""
-    from app.models import Student, Group, Grade, db
+    from app.models import Student, Group, db
 
     cols = _resolve_columns(df.columns, STUDENT_ALIASES)
     if 'student_id' not in cols and 'full_name' not in cols:
@@ -997,9 +1021,11 @@ def import_students(df, import_mode, errors):
                          'Ожидаются «Номер зачетки» и/или «ФИО».')
 
     if import_mode == 'replace':
+        # Оценки удаляются каскадом вместе со студентом
+        # (Student.grades — cascade='all, delete-orphan'). Явное удаление
+        # оценок сверх каскада давало повторный DELETE по уже пустым строкам
+        # и предупреждение SQLAlchemy о несовпадении числа строк.
         for s in Student.query.all():
-            for g in s.grades:
-                db.session.delete(g)
             db.session.delete(s)
         db.session.flush()
 
@@ -1287,6 +1313,34 @@ IMPORT_TITLES = {
 }
 
 
+def _read_import_table(file, filename):
+    """Читает загруженный файл в таблицу.
+
+    CSV разбирается с автоопределением разделителя и кодировки. Русский
+    Excel по умолчанию сохраняет CSV с точкой с запятой и в кодировке
+    cp1251, а pandas с настройками по умолчанию такой файл читал как одну
+    колонку, и импорт отвечал «не найдена колонка с номером зачётки» —
+    то есть на нормальном файле из Excel.
+    """
+    lower = filename.lower()
+    if lower.endswith(('.xlsx', '.xls')):
+        return pd.read_excel(file)
+    if not lower.endswith('.csv'):
+        raise ValueError('Неподдерживаемый формат. Допустимы .xlsx, .xls, .csv')
+
+    last_error = None
+    for encoding in ('utf-8-sig', 'cp1251'):
+        try:
+            if hasattr(file, 'stream'):
+                file.stream.seek(0)
+            return pd.read_csv(file, sep=None, engine='python',
+                               encoding=encoding)
+        except UnicodeDecodeError as error:
+            last_error = error
+    raise ValueError('Файл не читается: не удалось определить кодировку '
+                     f'({last_error})')
+
+
 def import_from_file(file, import_type='students', import_mode='append', **kwargs):
     """Импорт данных из Excel/CSV в базу.
 
@@ -1302,14 +1356,8 @@ def import_from_file(file, import_type='students', import_mode='append', **kwarg
         raise ValueError(f'Неизвестный тип импорта: {import_type}')
 
     filename = file.filename or ''
-    lower = filename.lower()
     try:
-        if lower.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(file)
-        elif lower.endswith('.csv'):
-            df = pd.read_csv(file)
-        else:
-            raise ValueError('Неподдерживаемый формат. Допустимы .xlsx, .xls, .csv')
+        df = _read_import_table(file, filename)
     finally:
         if hasattr(file, 'stream') and hasattr(file.stream, 'seek'):
             file.stream.seek(0)

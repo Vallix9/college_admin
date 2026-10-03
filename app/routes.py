@@ -20,7 +20,7 @@ from app.forms import JournalGradeForm, JournalEditForm, PeriodResultForm
 from app.forms import (AttendanceMarkForm, AttendanceBulkForm,
                        AttendanceEditForm, attendance_reason_choices,
                        ALL_DAY_SUBJECT, ALL_DAY_LABEL)
-from app.utils import build_periods, parse_academic_year, teacher_choices
+from app.utils import build_periods, teacher_choices
 from app.utils import export_to_excel, format_date, create_backup, restore_backup, import_from_file
 from app.utils import EXPORT_DIR
 import pandas as pd
@@ -30,7 +30,6 @@ from app.utils import (get_logger, average_grade, build_import_template,
 from app.utils import grade_distribution, journal_totals
 from app.utils import recommend_final_grade, grade_quality_stats
 from app.utils import read_log_lines, get_log_file_path, clear_log_file
-from app.utils import generate_password
 from app.utils import (generate_temporary_password, username_taken,
                        normalize_username, credentials_sheets,
                        find_user_by_login)
@@ -2230,7 +2229,8 @@ def journal_delete_grade(grade_id):
     log_audit('journal_grade_delete', user=current_user, entity_type='grade',
               entity_id=grade_id,
               details=f'студент={student.full_name if student else grade.student_id!r}, '
-                      f'предмет={subject.name!r}, значение={value!r}')
+                      f'предмет={subject.name!r}, значение={value!r}, '
+                      f'дата={lesson_date}')
     flash_msg('success', f'Оценка {value} удалена')
     return _journal_back(request.form)
 
@@ -3369,7 +3369,12 @@ def portal_periods(period):
                               key=lambda item: item.sort_order)
     index = next((i for i, item in enumerate(periods_list)
                   if item.id == period.id), None)
-    following = periods_list[index + 1] if index is not None else None
+    # index + 1, а не только index is not None: если текущий период
+    # последний в году (например, в базе заведён один период), следующего
+    # нет, и обращение выходило за конец списка — кабинет отдавал 500
+    following = (periods_list[index + 1]
+                 if index is not None and index + 1 < len(periods_list)
+                 else None)
     return periods_list, following
 
 

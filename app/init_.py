@@ -1,7 +1,6 @@
-from flask import Flask
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
-import os
 import importlib
 
 from app.utils import setup_logging
@@ -10,7 +9,15 @@ db = SQLAlchemy()
 login_manager = LoginManager()
 
 def resolve_config(config_class):
-    """Превращает 'config.Config' в сам класс Config."""
+    """Превращает 'config.Config' в сам класс Config.
+
+    Принимается и готовый класс: тестам нужен свой (с временной базой и
+    каталогами), а класс, объявленный прямо в conftest.py, нельзя назвать
+    строкой 'conftest.TestConfig' так, чтобы импорт не зависел от того,
+    откуда запущен pytest.
+    """
+    if not isinstance(config_class, str):
+        return config_class
     module_name, _, class_name = config_class.rpartition('.')
     if not module_name:
         return config_class
@@ -37,6 +44,28 @@ def create_app(config_class='config.Config'):
     # Импортируем и регистрируем Blueprint
     from app.routes import main
     app.register_blueprint(main)
+
+    @app.after_request
+    def add_security_headers(response):
+        """Заголовки, защищающие браузер от неоговорённых сценариев.
+
+        Без них форма, вставленная в чужую страницу, спокойно утаскивала
+        данные учётной записи, а приложение могло быть встроено в iframe
+        на стороннем сайте (clickjacking). Strict-Transport-Security
+        добавляется только по HTTPS: по HTTP он бессмысленен и вводит в
+        заблуждение при проверке из локальной сети.
+        """
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        # Только frame-ancestors: ограничение script-src сломало бы страницы,
+        # где скрипты инлайновые, а это почти все экраны журнала и оценок
+        response.headers.setdefault('Content-Security-Policy',
+                                     "frame-ancestors 'self'")
+        if request.is_secure:
+            response.headers.setdefault(
+                'Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+        return response
     
     # Хелперы журнала логов и расчёта оценок для шаблонов берём из utils —
     # там же настроено само логирование

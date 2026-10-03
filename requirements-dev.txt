@@ -1,0 +1,10 @@
+# Зависимости только для разработки и проверок.
+# Установка: pip install -r requirements.txt -r requirements-dev.txt
+# Тесты: pytest
+pytest==9.1.1
+
+# Служебные пакеты pytest, зафиксированы вместе с ним:
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+Pygments==2.21.0

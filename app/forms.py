@@ -1,5 +1,7 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, SelectField, DateField, IntegerField, TextAreaField, SubmitField, SelectMultipleField, FileField, FloatField, EmailField, HiddenField
+from wtforms import (StringField, PasswordField, BooleanField, SelectField,
+                    DateField, IntegerField, TextAreaField, SubmitField,
+                    SelectMultipleField, FileField, EmailField, HiddenField)
 from wtforms.validators import (DataRequired, InputRequired, Length, EqualTo,
                                 Optional, Email, ValidationError, NumberRange)
 from wtforms.widgets import ListWidget, CheckboxInput
@@ -170,7 +172,6 @@ class ScheduleItemForm(FlaskForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        from app.models import User
         from app.utils import group_choices, subject_choices, teacher_choices
         self.group_id.choices = group_choices()
         self.subject_id.choices = subject_choices()
@@ -207,7 +208,6 @@ class ScheduleDayForm(FlaskForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        from app.models import User
         from app.utils import group_choices, subject_choices, teacher_choices
         self.group_id.choices = group_choices()
         self.subject_id.choices = subject_choices()
@@ -560,7 +560,7 @@ class GradeForm(FlaskForm):
     def __init__(self, *args, **kwargs):
         super(GradeForm, self).__init__(*args, **kwargs)
         # Динамически обновляем выбор студентов и предметов
-        from app.models import Student, Subject
+        from app.models import Student
         self.student_id.choices = [(s.id, f'{s.last_name} {s.first_name} ({s.student_id})') 
                                   for s in Student.query.order_by(Student.last_name).all()]
         self.subject_id.choices = [(s.id, f'{s.name} ({s.hours}ч)') 

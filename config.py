@@ -89,18 +89,29 @@ class Config:
     
     # Настройки сессии
     PERMANENT_SESSION_LIFETIME = timedelta(days=7)
+    # Явно, а не по умолчанию Flask: кука сессии не должна читаться из
+    # JavaScript, а Lax не даёт браузеру приложить её к чужому POST
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    # Secure включается переменной окружения: по HTTPS обязательно, но
+    # включённый принудительно он ломает вход при запуске по HTTP
+    SESSION_COOKIE_SECURE = os.environ.get('COOKIE_SECURE', '').lower() \
+        in ('1', 'true', 'yes', 'on')
     
     # Настройки загрузки файлов
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
-    UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
-    
-    # Настройки резервного копирования
-    BACKUP_FOLDER = os.path.join(basedir, 'backups')
-    
-    # Каталоги экспорта и логов (вынесены из init_app, чтобы к ним
-    # могли обращаться utils.py и хелперы журнала логов)
-    EXPORT_FOLDER = os.path.join(basedir, 'exports')
-    LOG_FOLDER = os.path.join(basedir, 'logs')
+
+    # Каталоги можно переопределить переменными окружения: utils.py читает
+    # те же имена, иначе бэкапы и выгрузки уходили бы в папку рядом с
+    # исходниками, минуя настройку (так тесты писали бы в рабочий exports/).
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or \
+        os.path.join(basedir, 'uploads')
+    BACKUP_FOLDER = os.environ.get('BACKUP_FOLDER') or \
+        os.path.join(basedir, 'backups')
+    EXPORT_FOLDER = os.environ.get('EXPORT_FOLDER') or \
+        os.path.join(basedir, 'exports')
+    LOG_FOLDER = os.environ.get('LOG_FOLDER') or \
+        os.path.join(basedir, 'logs')
     
     # Сетевые настройки сервера
     HOST = os.environ.get('HOST', '127.0.0.1')
