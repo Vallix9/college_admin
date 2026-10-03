@@ -1,4 +1,4 @@
-﻿from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, send_from_directory
+from flask import Blueprint, render_template, redirect, url_for, flash, request, send_file, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
 from urllib.parse import urlparse
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +46,30 @@ def flash_msg(type, message):
 
 def get_settings():
     return SystemSettings.get_settings()
+
+def csrf_token():
+    """Токен для <input type=hidden> в обычной, не-WTForms форме."""
+    return DeleteTokenForm().csrf_token
+
+def check_csrf_or_none():
+    """True, если запрос с настоящим CSRF-токеном.
+
+    Глобального CSRFProtect в проекте нет: токен проверяет форма, а форма
+    есть только у FlaskForm. Обычные <form> (таблицы, быстрые формы на
+    странице студента) шли без проверки, и любой сайт мог отправить за
+    авторизованным сотрудником POST, который меняет данные.
+    """
+    return DeleteTokenForm().validate()
+
+def csrf_denied(action):
+    """Ответ на запрос без CSRF-токена: 400 и предупреждение в журнал.
+
+    Отдельный помощник, чтобы все защищённые маршруты отвечали одинаково и
+    отказ попадал в logs/app.log с понятным именем маршрута.
+    """
+    log.warning('POST без CSRF-токена отклонён: %s — %s', action,
+                getattr(current_user, 'username', 'аноним'))
+    return {'success': False, 'error': 'Недействительный CSRF-токен'}, 400
 
 def safe_int(value, default=0):
     try:
@@ -329,6 +353,21 @@ def login():
         # системе есть. С верным паролем сообщение остаётся полезным.
         password_ok = user is not None and user.check_password(form.password.data)
 
+        # Подбор пароля закрывается до проверки: иначе пять неудач подряд
+        # не мешали бы подбирать дальше — ограничение, которое не
+        # ограничивает. Счётчик общий для сотрудников и студентов.
+        if user is not None and user.login_locked:
+            until = user.login_locked_until
+            minutes = max(1, int((until - datetime.now()).total_seconds() // 60) + 1)
+            log.warning('Вход закрыт после неудачных попыток: «%s» с %s',
+                        form.username.data, request.remote_addr)
+            flash_msg('error',
+                      f'Слишком много неудачных попыток. Повторите через '
+                      f'{minutes} мин.')
+            log_audit('login_locked', user=user,
+                      details=f'login={user.username!r}')
+            return redirect(url_for('main.login'))
+
         if password_ok and not user.is_active:
             log.warning('Попытка входа заблокированного пользователя «%s» с %s',
                         form.username.data, request.remote_addr)
@@ -343,11 +382,19 @@ def login():
                 next_page = home_url()
             
             user.last_login_at = datetime.now()
+            # Успешный вход обнуляет счётчик неудач: иначе пять неудачных
+            # попыток months назад закрыли бы вход сегодняшнему
+            user.clear_failed_logins()
             db.session.commit()
             log.info('Вход выполнен: %s (роль: %s) с %s',
                      user.username, user.role, request.remote_addr)
             log_audit('login', user=user)
             flash_msg('success', f'Добро пожаловать, {user.display_name}!')
+            if user.password_temporary:
+                # Пароль выдан на бумаге и живёт в ведомости: пока человек
+                # его не заменил, им пользуются все, кто видел список
+                flash_msg('warning', 'Вы вошли с временным паролем. '
+                                     'Смените его в личном кабинете')
             return redirect(next_page)
         
         else:
@@ -355,11 +402,35 @@ def login():
             # разные ответы сказали бы проверяющему, какие логины в системе есть
             log.warning('Неудачная попытка входа: логин «%s» с %s',
                         form.username.data, request.remote_addr)
+            locked_now = False
+            left = None
+            if user is not None:
+                locked_now = user.register_failed_login()
+                left = user.login_attempts_left
+                db.session.commit()
             flash_msg('error', 'Неверное имя пользователя или пароль')
+            # Не подсказываем, сколько именно попыток осталось: это
+            # превращает ограничение в счётчик для подбора. Число остаётся
+            # в записи журнала, где его видит администратор.
+            if locked_now:
+                minutes = User.LOCKOUT_MINUTES
+                log.warning('Вход закрыт для «%s» после %d неудачных попыток — %s',
+                            form.username.data, User.MAX_FAILED_LOGINS,
+                            request.remote_addr)
+                flash_msg('error',
+                          f'Слишком много неудачных попыток. Повторите через '
+                          f'{minutes} мин.')
+                log_audit('login_locked', user=user,
+                          details=f'login={form.username.data!r}')
+            elif left is not None and left <= 2:
+                # Предупреждаем незадолго до блокировки: молчаливый счётчик
+                # обесценивает его, а полный список попыток подсказывает
+                # проверяющему, сколько ещё можно угадать
+                log.info('До блокировки «%s» осталось попыток: %d — %s',
+                         form.username.data, left, request.remote_addr)
             # 13.2: попытка входа — тоже действие. Логин пишем (без пароля),
             # чтобы было видно подбор: user=None, потому что запись может
-            # не существовать. Попытки неудачного входа — источник для
-            # Фазы 14.4 (ограничение попыток).
+            # не существовать.
             log_audit('login_failed', user=None,
                       details=f'login={form.username.data!r}')
     
@@ -525,6 +596,9 @@ def edit_student(id):
 @main.route('/students/<int:id>/delete', methods=['POST'])
 @admin_required
 def delete_student(id):
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_student')
     student = Student.query.get_or_404(id)
     full_name = student.full_name
     try:
@@ -613,6 +687,9 @@ def view_student(student_id):
 @staff_required
 def add_grade_to_student(student_id):
     """Добавление оценки конкретному студенту со страницы студента"""
+    if not check_csrf_or_none():
+        return csrf_denied('add_grade_to_student')
+
     student = Student.query.get_or_404(student_id)
     
     # Получаем данные из формы
@@ -662,6 +739,9 @@ def add_grade_to_student(student_id):
 @staff_required
 def delete_student_grade(student_id, grade_id):
     """Удаление оценки студента (основной эндпоинт для шаблона)"""
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_student_grade')
     try:
         grade = Grade.query.get_or_404(grade_id)
         # Проверяем, что оценка принадлежит студенту
@@ -691,6 +771,9 @@ def delete_student_grade(student_id, grade_id):
 @staff_required
 def delete_grade_from_student(student_id, grade_id):
     """Альтернативный эндпоинт для удаления оценки"""
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_grade_from_student')
     return delete_student_grade(student_id, grade_id)
 
 # ===================== ГРУППЫ =====================
@@ -763,6 +846,9 @@ def edit_group(id):
 @main.route('/groups/<int:id>/delete', methods=['POST'])
 @admin_required
 def delete_group(id):
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_group')
     group = Group.query.get_or_404(id)
     name = group.name
     try:
@@ -796,6 +882,8 @@ def subjects():
 def add_subject():
     """Добавление нового предмета (ОДНА ФУНКЦИЯ - НЕТ ДУБЛИРОВАНИЯ)"""
     if request.method == 'POST':
+        if not check_csrf_or_none():
+            return csrf_denied('add_subject')
         # Обработка быстрого добавления из текстового поля
         subjects_text = request.form.get('subjects_text')
         if subjects_text:
@@ -916,6 +1004,9 @@ def edit_subject(id):
 @admin_required
 def delete_subject(id):
     """Удаление предмета"""
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_subject')
     subject = Subject.query.get_or_404(id)
     try:
         # Проверяем, есть ли оценки по этому предмету
@@ -1051,6 +1142,9 @@ def add_grade():
 @staff_required
 def delete_grade(id):
     """Удаление оценки"""
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_grade')
     grade = Grade.query.get_or_404(id)
     if not current_user.teaches(grade.subject):
         log.warning('Преподаватель %s попытался удалить оценку по чужому предмету «%s»',
@@ -1191,6 +1285,9 @@ def edit_period(id):
 @main.route('/periods/<int:id>/delete', methods=['POST'])
 @admin_required
 def delete_period(id):
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_period')
     period = AcademicPeriod.query.get_or_404(id)
     grades_count = Grade.query.filter_by(period_id=period.id).count()
     if grades_count:
@@ -1426,6 +1523,9 @@ def fill_schedule_day():
 @main.route('/schedule/<int:id>/delete', methods=['POST'])
 @admin_required
 def delete_schedule_item(id):
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_schedule_item')
     item = ScheduleItem.query.get_or_404(id)
     group_id = item.group_id
     # Отметки о состоявшихся занятиях — вместе со слотом
@@ -2098,6 +2198,9 @@ def journal_edit_grade(grade_id):
 @staff_required
 def journal_delete_grade(grade_id):
     """Удаление оценки с записью в историю (8.5)."""
+
+    if not check_csrf_or_none():
+        return csrf_denied('journal_delete_grade')
     grade = db.session.get(Grade, grade_id)
     if grade is None:
         flash_msg('error', 'Оценка не найдена')
@@ -2513,6 +2616,9 @@ def attendance_edit(record_id):
 def attendance_delete(record_id):
     """Удаление пропуска (9.4). Форма отправляется только из окна
     подтверждения, отдельной страницы удаления нет."""
+
+    if not check_csrf_or_none():
+        return csrf_denied('attendance_delete')
     record = db.session.get(AttendanceRecord, record_id)
     if record is None:
         flash_msg('error', 'Пропуск не найден')
@@ -2837,6 +2943,9 @@ def delete_staff(id):
     Удаляем только тех, у кого нет назначенных предметов; остальным
     предлагаем блокировку, чтобы не терять историю действий.
     """
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_staff')
     user = User.query.get_or_404(id)
     if user.id == current_user.id:
         flash_msg('error', 'Нельзя удалить собственную учётную запись')
@@ -2915,6 +3024,9 @@ def issue_accounts():
     выданные записи не трогаются: сброс чужого пароля — отдельное
     осознанное действие, а не побочный эффект кнопки «выдать всем».
     """
+    if not check_csrf_or_none():
+        return csrf_denied('issue_accounts')
+
     group_id = request.form.get('group_id', type=int)
     include_without = request.form.get('all_students') == '1'
 
@@ -3095,6 +3207,9 @@ def set_student_account(id):
 @admin_required
 def reset_student_account(id):
     """Сброс пароля ученической записи — новый временный (11.5)."""
+
+    if not check_csrf_or_none():
+        return csrf_denied('reset_student_account')
     user = User.query.get_or_404(id)
     if user.role != User.ROLE_STUDENT:
         flash_msg('error', 'Это не учётная запись студента')
@@ -3129,6 +3244,9 @@ def toggle_student_account(id):
     Запись не удаляется: у отчисленного студента остаётся история оценок и
     входов, и удаление аккаунта обнулило бы её.
     """
+
+    if not check_csrf_or_none():
+        return csrf_denied('toggle_student_account')
     user = User.query.get_or_404(id)
     if user.role != User.ROLE_STUDENT:
         flash_msg('error', 'Это не учётная запись студента')
@@ -3144,6 +3262,11 @@ def toggle_student_account(id):
         return redirect(url_for('main.accounts'))
 
     if user.is_active:
+        # Разблокировка снимает и подбор: человек вернулся, а счётчик
+        # неудачных попыток остался бы от прошлого подхода и закрыл бы
+        # ему вход сразу после разблокировки
+        user.clear_failed_logins()
+        db.session.commit()
         log.info('Разблокирована учётная запись %s (логин %s) — %s',
                  user.display_name, user.username, current_user.username)
         log_audit('student_account_unblock', user=current_user,
@@ -3168,6 +3291,9 @@ def delete_student_account(id):
     Студент остаётся в базе вместе с оценками: терять историю из-за
     забытого пароля нельзя, учётную запись можно создать заново одной кнопкой.
     """
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_student_account')
     user = User.query.get_or_404(id)
     if user.role != User.ROLE_STUDENT:
         flash_msg('error', 'Это не учётная запись студента')
@@ -3891,80 +4017,6 @@ def reports():
                                db.func.count(Grade.id)).scalar() or 0,
                            subject_count=Subject.query.count())
 
-@main.route('/reports/generate', methods=['POST'])
-@staff_required
-def generate_report():
-    report_type = request.form.get('report_type')
-    group_id = request.form.get('group_id')
-    start_date = request.form.get('start_date')
-    end_date = request.form.get('end_date')
-    try:
-        if report_type == 'students':
-            query = Student.query
-            if group_id:
-                query = query.filter_by(group_id=group_id)
-            
-            data = [{
-                'Номер зачетки': s.student_id,
-                'ФИО': s.full_name,
-                'Группа': s.group.name if s.group else '',
-                'Дата рождения': format_date(s.birth_date),
-                'Email': s.email or '',
-                'Телефон': s.phone or '',
-                'Статус': s.status
-            } for s in query.all()]
-            
-            filepath = export_to_excel(data, 'students_report')
-            log.info('Экспорт отчёта: студенты (%s строк) — %s',
-                     len(data), current_user.username)
-            # Выгрузка уводит персональные данные из системы в файл, который
-            # потом гуляет по почте: в журнал — вид отчёта и число строк,
-            # но не сами ФИО
-            log_audit('report_export', user=current_user, entity_type='report',
-                      entity_id='students',
-                      details=f'вид=студенты, строк={len(data)}, '
-                              f'группа={group_id!r}')
-            return send_file(filepath, as_attachment=True)
-        
-        elif report_type == 'grades':
-            query = Grade.query
-            
-            if group_id:
-                query = query.join(Student).filter(Student.group_id == group_id)
-            
-            if start_date:
-                query = query.filter(Grade.date >= datetime.strptime(start_date, '%Y-%m-%d').date())
-            
-            if end_date:
-                query = query.filter(Grade.date <= datetime.strptime(end_date, '%Y-%m-%d').date())
-            
-            data = [{
-                'Студент': g.student.full_name if g.student else '',
-                'Группа': g.student.group.name if g.student and g.student.group else '',
-                'Предмет': g.subject.name if g.subject else '',
-                'Оценка': g.grade_value,
-                'Тип оценки': g.grade_type,
-                'Дата': format_date(g.date),
-                'Комментарий': g.comments or ''
-            } for g in query.all()]
-            
-            filepath = export_to_excel(data, 'grades_report')
-            log.info('Экспорт отчёта: оценки (%s строк) — %s',
-                     len(data), current_user.username)
-            log_audit('report_export', user=current_user, entity_type='report',
-                      entity_id='grades',
-                      details=f'вид=оценки, строк={len(data)}, группа={group_id!r}, '
-                              f'период={start_date!r}..{end_date!r}')
-            return send_file(filepath, as_attachment=True)
-        
-        flash_msg('error', 'Неверный тип отчета')
-        return redirect(url_for('main.reports'))
-        
-    except Exception as e:
-        log.exception('Ошибка генерации отчёта: %s', e)
-        flash_msg('error', f'Ошибка генерации отчета: {str(e)}')
-        return redirect(url_for('main.reports'))
-
 @main.route('/reports/students')
 @staff_required
 def report_students():
@@ -4138,6 +4190,9 @@ def download_backup_file(filename):
 @admin_required
 def restore_backup_file(filename):
     """Восстановление базы данных из резервной копии"""
+
+    if not check_csrf_or_none():
+        return csrf_denied('restore_backup_file')
     path = os.path.join(get_backup_dir(), os.path.basename(sanitize_filename(filename)))
     if not os.path.isfile(path):
         log.warning('Восстановление несуществующей копии «%s» — %s', filename, current_user.username)
@@ -4163,6 +4218,9 @@ def restore_backup_file(filename):
 @admin_required
 def delete_backup_file(filename):
     """Удаление файла резервной копии"""
+
+    if not check_csrf_or_none():
+        return csrf_denied('delete_backup_file')
     if delete_backup(filename):
         log.warning('Удалена резервная копия «%s» — %s', filename, current_user.username)
         log_audit('backup_delete', user=current_user, entity_type='backup',

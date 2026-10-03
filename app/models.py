@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -40,13 +40,81 @@ class User(UserMixin, db.Model):
     # и снимается в /my/password.
     password_temporary = db.Column(db.Boolean, default=False, nullable=False)
     last_login_at = db.Column(db.DateTime)
+    # Подбор пароля (14.4). Счётчик и время последней неудачи живут в самой
+    # учётной записи, а не в памяти процесса: при перезапуске или при
+    # нескольких работниках waitress счётчик в памяти обнулялся бы, и
+    # ограничение перестало бы ограничивать.
+    failed_login_count = db.Column(db.Integer, default=0, nullable=False)
+    last_failed_login_at = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     full_name = db.Column(db.String(200))
     email = db.Column(db.String(100))
 
+    # Порог подбора: столько неудач подряд — и вход закрывается на
+    # LOCKOUT_MINUTES. Держится на модели, чтобы сотрудник, студент и
+    # администратор закрывались одинаково.
+    MAX_FAILED_LOGINS = 5
+    LOCKOUT_MINUTES = 15
+    # Пауза перед счётом новой серии неудач: после долгого перерыва старые
+    # попытки уже ничего не говорят о текущем подборе
+    FAILED_LOGIN_WINDOW_MINUTES = 30
+
+    @property
+    def login_locked(self):
+        """Вход закрыт прямо сейчас.
+
+        Обязательно обе проверки: и порог, и не истёкшее время. Только по
+        времени любой неудачной попытки вход считался бы закрытым на 15
+        минут после первого же промаха.
+        """
+        if (self.failed_login_count or 0) < self.MAX_FAILED_LOGINS:
+            return False
+        if self.last_failed_login_at is None:
+            return False
+        deadline = (self.last_failed_login_at
+                    + timedelta(minutes=self.LOCKOUT_MINUTES))
+        return now() < deadline
+
+    @property
+    def login_locked_until(self):
+        if self.last_failed_login_at is None:
+            return None
+        return (self.last_failed_login_at
+                + timedelta(minutes=self.LOCKOUT_MINUTES))
+
+    @property
+    def login_attempts_left(self):
+        """Сколько попыток осталось до блокировки."""
+        if self.login_locked:
+            return 0
+        return max(0, self.MAX_FAILED_LOGINS - (self.failed_login_count or 0))
+
+    def register_failed_login(self):
+        """Засчитать неудачную попытку и вернуть True, если вход закрылся."""
+        previous = self.last_failed_login_at
+        if (previous is not None and
+                now() - previous > timedelta(
+                    minutes=self.FAILED_LOGIN_WINDOW_MINUTES)):
+            # Серия началась заново: счётчик относится к последнему
+            # получасу, а не ко всей истории учётной записи
+            self.failed_login_count = 0
+        self.failed_login_count = (self.failed_login_count or 0) + 1
+        self.last_failed_login_at = now()
+        return self.failed_login_count >= self.MAX_FAILED_LOGINS
+
+    def clear_failed_logins(self):
+        self.failed_login_count = 0
+        self.last_failed_login_at = None
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
         self.password_changed_at = now()
+        # Новый пароль — и подбор к старому больше не имеет смысла: не
+        # закрытый по счётчику вход, а обычный вход по новому паролю.
+        # Иначе администратор, сбросивший пароль забывчивому сотруднику,
+        # оставил бы ему заблокированный вход на 15 минут.
+        self.failed_login_count = 0
+        self.last_failed_login_at = None
 
     def set_temporary_password(self, password):
         """Выдать временный пароль и запомнить, что он ещё не заменён."""
@@ -573,6 +641,7 @@ class AuditLog(db.Model):
     ACTION_LABELS = {
         'login': 'Вход в систему',
         'login_failed': 'Неудачная попытка входа',
+        'login_locked': 'Вход заблокирован: слишком много неудачных попыток',
         'login_blocked': 'Вход в отключённую учётную запись',
         'logout': 'Выход из системы',
         'password_change_self': 'Смена собственного пароля',

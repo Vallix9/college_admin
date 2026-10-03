@@ -23,6 +23,24 @@ GRADE_TYPE_CHOICES = [
     ('незачет', 'Незачёт'),
 ]
 
+# Минимальная длина пароля (14.6). Правило одно на все формы: когда у
+# каждой формы своё число, через год одна из них окажется с шестью
+# символами, и это будет самая используемая.
+MIN_PASSWORD_LENGTH = 8
+
+
+def password_length(*, required=True):
+    """Валидаторы длины пароля.
+
+    required=False — для полей, которые при правке учётной записи можно
+    не заполнять (пароль не меняется).
+    """
+    head = [DataRequired()] if required else [Optional()]
+    return head + [Length(min=MIN_PASSWORD_LENGTH, max=128,
+                           message=f'Пароль не короче '
+                                   f'{MIN_PASSWORD_LENGTH} символов')]
+
+
 class MultiCheckboxField(SelectMultipleField):
     widget = ListWidget(prefix_label=False)
     option_widget = CheckboxInput()
@@ -444,7 +462,7 @@ class StaffForm(FlaskForm):
         (User.ROLE_TEACHER, 'Преподаватель — свои предметы'),
     ], validators=[DataRequired()])
     password = PasswordField(
-        'Пароль*', validators=[Optional(), Length(min=6, max=128)])
+        'Пароль*', validators=password_length(required=False))
     confirm_password = PasswordField(
         'Повторите пароль*',
         validators=[EqualTo('password', message='Пароли не совпадают')])
@@ -459,7 +477,7 @@ class StaffForm(FlaskForm):
         super().__init__(*args, **kwargs)
         if user is None:
             # При создании пароль обязателен, при правке — нет
-            self.password.validators = [DataRequired(), Length(min=6, max=128)]
+            self.password.validators = password_length()
             self.confirm_password.validators = [
                 DataRequired(),
                 EqualTo('password', message='Пароли не совпадают')]
@@ -482,7 +500,7 @@ class StaffForm(FlaskForm):
 
 class StaffPasswordResetForm(FlaskForm):
     """Сброс пароля сотрудника администратором."""
-    password = PasswordField('Новый пароль*', validators=[DataRequired(), Length(min=6, max=128)])
+    password = PasswordField('Новый пароль*', validators=password_length())
     confirm_password = PasswordField(
         'Повторите пароль*',
         validators=[EqualTo('password', message='Пароли не совпадают')])
@@ -494,7 +512,7 @@ class AccountPasswordForm(FlaskForm):
     current_password = PasswordField(
         'Текущий пароль*', validators=[DataRequired()])
     new_password = PasswordField(
-        'Новый пароль*', validators=[DataRequired(), Length(min=6, max=128)])
+        'Новый пароль*', validators=password_length())
     confirm_password = PasswordField(
         'Повторите новый пароль*',
         validators=[EqualTo('new_password', message='Пароли не совпадают')])
@@ -510,7 +528,7 @@ class StudentAccountForm(FlaskForm):
     зачётка в ведомости под другим.
     """
     password = PasswordField(
-        'Временный пароль*', validators=[DataRequired(), Length(min=6, max=128)])
+        'Временный пароль*', validators=password_length())
     confirm_password = PasswordField(
         'Повторите пароль*',
         validators=[EqualTo('password', message='Пароли не совпадают')])
@@ -598,7 +616,7 @@ class SettingsForm(FlaskForm):
     
     # Смена пароля (необязательно — заполняется только при смене)
     current_password = PasswordField('Текущий пароль', validators=[Optional()])
-    new_password = PasswordField('Новый пароль', validators=[Optional(), Length(min=6, max=100)])
+    new_password = PasswordField('Новый пароль', validators=password_length(required=False))
     confirm_password = PasswordField('Подтвердите новый пароль', 
                                      validators=[EqualTo('new_password', message='Пароли должны совпадать')])
     

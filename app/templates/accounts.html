@@ -23,6 +23,7 @@
     </div>
     <div class="card-body">
         <form method="POST" action="{{ url_for('main.issue_accounts') }}" class="row g-3 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="col-md-4">
                 <label class="form-label" for="issue_group">Группа</label>
                 <select name="group_id" id="issue_group" class="form-select">
@@ -189,6 +190,7 @@
                                 </button>
                                 <form method="POST" action="{{ url_for('main.toggle_student_account', id=user.id) }}"
                                       style="display: inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-outline-secondary"
                                             title="{% if user.is_active %}Заблокировать{% else %}Разблокировать{% endif %}">
                                         <i class="bi bi-{% if user.is_active %}lock{% else %}unlock{% endif %}"></i>
@@ -196,6 +198,7 @@
                                 </form>
                                 <form method="POST" action="{{ url_for('main.delete_student_account', id=user.id) }}"
                                       style="display: inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-outline-danger" title="Удалить запись"
                                             onclick="return confirm('Удалить учётную запись {{ user.username }}? Студент и его оценки останутся в базе, запись можно будет выдать заново.');">
                                         <i class="bi bi-trash"></i>
@@ -207,6 +210,7 @@
                     <tr class="collapse" id="reset{{ user.id }}">
                         <td colspan="8" class="bg-light">
                             <form method="POST" action="{{ url_for('main.reset_student_account', id=user.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <div class="row g-2 align-items-end">
                                     <div class="col-md-4">
                                         <label class="form-label small mb-1">

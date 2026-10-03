@@ -313,7 +313,12 @@ def main():
             if grade:
                 with app.test_client() as client:
                     if login(client, ids['teacher_name'], TEACHER_PASSWORD):
-                        token = csrf_of(client)
+                        # Токен берём со страницы, доступной авторизованному:
+                        # /login после входа отдаёт редирект, а /grades
+                        # преподавателю вообще без токена — кнопки удаления
+                        # ему не показывают. Токен привязан к сессии, а не
+                        # к странице, поэтому подходит любой источник
+                        token = csrf_of(client, '/students')
                         resp = client.post(
                             f'/grades/{grade.id}/delete',
                             data={'csrf_token': token},

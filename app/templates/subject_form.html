@@ -108,6 +108,7 @@
                 </p>
                 <form method="POST" action="{{ url_for('main.delete_subject', id=subject.id) }}" 
                       onsubmit="return confirm('Вы уверены, что хотите удалить предмет \{{ subject.name }}\?{% if subject.grades %} Все оценки по этому предмету также будут удалены.{% endif %}');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-danger" {% if subject.grades %}disabled{% endif %}>
                         <i class="bi bi-trash"></i> Удалить предмет
                     </button>

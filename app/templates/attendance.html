@@ -358,6 +358,7 @@
                     Отмена
                 </button>
                 <form method="POST" id="deleteForm" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="group_id" value="{{ group.id }}">
                     <input type="hidden" name="period_id" value="{{ period.id }}">
                     <button class="btn btn-danger">Удалить</button>

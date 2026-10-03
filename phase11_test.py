@@ -405,7 +405,8 @@ def run_checks():
     group = make_group_with_students(4)
     client = admin_client()
     response = client.post('/accounts/issue',
-                           data={'group_id': str(group['id'])},
+                           data={'group_id': str(group['id']),
+                                 'csrf_token': csrf(client, '/accounts')},
                            follow_redirects=True)
     html = response.get_data(as_text=True)
     text = page_text(html)
@@ -494,6 +495,7 @@ def run_checks():
         before_hash = student_user.password_hash
 
     response = client.post(f'/accounts/{student_user_id}/reset',
+                           data={'csrf_token': csrf(client, '/accounts')},
                            follow_redirects=True)
     html = response.get_data(as_text=True)
     with app.app_context():
@@ -516,7 +518,9 @@ def run_checks():
           shown and shown[0].strip() not in html)
 
     # блокировка
-    client.post(f'/accounts/{student_user_id}/toggle', follow_redirects=True)
+    client.post(f'/accounts/{student_user_id}/toggle',
+                data={'csrf_token': csrf(client, '/accounts')},
+                follow_redirects=True)
     with app.app_context():
         user = db.session.get(User, student_user_id)
         check('запись заблокирована', user.is_active is False)
@@ -533,7 +537,9 @@ def run_checks():
               'отключена' in text or 'заблокирован' in text.lower(),
               'ожидалось сообщение об отключённой записи')
 
-    client.post(f'/accounts/{student_user_id}/toggle', follow_redirects=True)
+    client.post(f'/accounts/{student_user_id}/toggle',
+                data={'csrf_token': csrf(client, '/accounts')},
+                follow_redirects=True)
     with app.app_context():
         user = db.session.get(User, student_user_id)
         check('запись разблокирована', user.is_active is True)
@@ -570,7 +576,9 @@ def run_checks():
     with app.app_context():
         student = db.session.get(Student, target['id'])
         Grade.query.filter_by(student_id=student.id).first()
-    client.post(f'/accounts/{student_user_id}/delete', follow_redirects=True)
+    client.post(f'/accounts/{student_user_id}/delete',
+                data={'csrf_token': csrf(client, '/accounts')},
+                follow_redirects=True)
     with app.app_context():
         check('учётная запись удалена',
               db.session.get(User, student_user_id) is None)

@@ -40,6 +40,12 @@ COLUMNS = [
      "period_kind VARCHAR(20) DEFAULT 'quarter' NOT NULL"),
     # Фаза 11: пароль выдан администратором и ещё не заменён пользователем
     ('user', 'password_temporary', 'password_temporary BOOLEAN DEFAULT 0'),
+    # Фаза 14: подбор пароля. Счётчик и время последней неудачи — по ним
+    # вход закрывается на User.LOCKOUT_MINUTES после MAX_FAILED_LOGINS
+    # неудачных попыток подряд
+    ('user', 'failed_login_count',
+     'failed_login_count INTEGER DEFAULT 0 NOT NULL'),
+    ('user', 'last_failed_login_at', 'last_failed_login_at DATETIME'),
 ]
 
 # Индексы и ограничения, которые create_all() не добавит к уже существующей

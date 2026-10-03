@@ -303,6 +303,7 @@
             <div class="card-body">
                 <p class="text-muted">Удаление студента приведет к безвозвратному удалению всех его данных, включая оценки.</p>
                 <form method="POST" action="{{ url_for('main.delete_student', id=student.id) }}" onsubmit="return confirm('Вы уверены, что хотите удалить студента {{ student.full_name }}? Это действие нельзя отменить.');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-danger">
                         <i class="bi bi-trash"></i> Удалить студента
                     </button>

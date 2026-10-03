@@ -478,7 +478,8 @@ def run_checks(data):
         'csrf_token': csrf(client, '/my/password')}, follow_redirects=True)
     html = response.get_data(as_text=True)
     check('короткий пароль отклоняется',
-          'Field must be' in field_errors(html, 'new_password'),
+          any(marker in field_errors(html, 'new_password')
+              for marker in ('не короче', 'Field must be')),
           f'ошибка поля: {field_errors(html, "new_password")!r}')
     with app.app_context():
         user = db.session.get(User, db.session.get(Student, me).user_id)

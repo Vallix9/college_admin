@@ -81,6 +81,15 @@ def create_app(config_class='config.Config'):
         from flask_login import current_user
         return {'portal_nav_items': portal_items_for(current_user)}
 
+    # Токен для обычных, не-WTForms <form>. Глобального CSRFProtect в
+    # проекте нет, поэтому каждый такой POST обязан сам положить токен в
+    # тело и проверить его на сервере. Чтобы шаблон не изобретал способ
+    # получения токена, отдаём его одним контекстом.
+    @app.context_processor
+    def csrf_processor():
+        from app.forms import DeleteTokenForm
+        return {'csrf_token': DeleteTokenForm().csrf_token}
+
     return app
 
 
