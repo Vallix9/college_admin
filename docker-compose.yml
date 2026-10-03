@@ -2,21 +2,45 @@ services:
   web:
     build: .
     ports:
-      - "5000:5000"
+      # Порт задаётся один раз переменной PORT (по умолчанию 5000) и
+      # используется с обеих сторон. Раньше «5000:5000» было написано
+      # дважды: чтобы поднять на другом порту, приходилось править и
+      # слева, и справа, и забыть одну из строк — а ошибка выглядит
+      # как «порт занят».
+      - "${PORT:-5000}:${PORT:-5000}"
     environment:
       FLASK_APP: run.py
       FLASK_DEBUG: "0"
       WAITRESS: "1"
+      # Слушать надо на 0.0.0.0: внутри контейнера 127.0.0.1 — это
+      # сам контейнер, и снаружи порт не откроется
       HOST: 0.0.0.0
-      PORT: "5000"
+      PORT: "${PORT:-5000}"
       DATABASE_URL: sqlite:////app/data/college.db
-      # Задайте свой SECRET_KEY. В .env используется подстановка.
-      SECRET_KEY: ${SECRET_KEY:?задайте SECRET_KEY в .env или переменной окружения}
+      APP_ENV: production
+      # Часовой пояс контейнера. Без него datetime.now() внутри даёт UTC, и
+      # записи в журнале действий и app.log оказываются на три часа позже
+      # хостовых: в одном файле два времени, разбираться в котором — лотерея.
+      TZ: ${TZ:-Europe/Moscow}
+      # Первый администратор. Создаётся один раз:
+      #   docker compose exec web python create_admin.py
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?задайте ADMIN_PASSWORD в .env}
+      # Обязательный SECRET_KEY. Берётся из .env, а не задаётся здесь:
+      # подставной ключ в репозитории — это ключ, который есть у всех.
+      SECRET_KEY: ${SECRET_KEY:?задайте SECRET_KEY в .env или в окружении}
     volumes:
+      # База — именованный том, а не монтирование файла: файл SQLite
+      # на хосте монтируется монолитным блоком, и две копии базы
+      # разъезжаются по мере записи
       - college_data:/app/data
       - ./logs:/app/logs
       - ./backups:/app/backups
       - ./exports:/app/exports
+    # Схема готовится при каждом старте. migrations.py идемпотентен, а без
+    # него контейнер с пустым томом поднимается и отдаёт /login, падая на
+    # первом же входе: страница входа базы не касается.
+    command: sh -c "python migrations.py && python run.py"
     restart: unless-stopped
 
 volumes:

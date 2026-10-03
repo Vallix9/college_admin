@@ -12,8 +12,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Колледж хранит данные в SQLite — каталог монтируется в volumes,
-# чтобы college.db переживал пересборку образа
-RUN mkdir -p /app/data /app/logs /app/backups /app/exports /app/uploads
+# чтобы college.db переживал пересборку образа.
+# Владельцем назначается непривилегированный пользователь: именованный
+# том наследует права каталога из образа, иначе приложение, запущенное
+# не от root, не сможет создать файл базы.
+RUN mkdir -p /app/data /app/logs /app/backups /app/exports /app/uploads \
+    && useradd --create-home --uid 1000 college \
+    && chown -R college:college /app
 
 ENV FLASK_APP=run.py \
     PYTHONUNBUFFERED=1 \
@@ -24,6 +29,8 @@ ENV FLASK_APP=run.py \
     DATABASE_URL=sqlite:////app/data/college.db
 
 EXPOSE 5000
+
+USER college
 
 # В контейнере dev-сервер Werkzeug не используется — только waitress
 CMD ["python", "run.py"]
