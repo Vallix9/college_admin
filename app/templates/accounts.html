@@ -8,7 +8,7 @@
 {% endblock %}
 
 {% block page_title %}
-<i class="bi bi-person-badge me-2"></i>Учётные записи студентов
+<i class="bi bi-person-badge me-2"></i> Учётные записи студентов
 {% endblock %}
 
 {% block page_subtitle %}
@@ -19,7 +19,7 @@
 {% block content %}
 <div class="card mb-4 no-print">
     <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-people me-2"></i>Выдать учётные записи</h5>
+        <h5 class="mb-0"><i class="bi bi-people me-2"></i> Выдать учётные записи</h5>
     </div>
     <div class="card-body">
         <form method="POST" action="{{ url_for('main.issue_accounts') }}" class="row g-3 align-items-end">
@@ -105,7 +105,7 @@
 <div class="card">
     <div class="card-header">
         <h5 class="mb-0">
-            <i class="bi bi-person-vcard me-2"></i>Активные записи ({{ accounts|length }})
+            <i class="bi bi-person-vcard me-2"></i> Активные записи ({{ accounts|length }})
         </h5>
     </div>
     <div class="card-body no-print">
@@ -183,15 +183,15 @@
                             {% endif %}
                         </td>
                         <td class="text-end">
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button type="button" class="btn btn-outline-warning" title="Сбросить пароль"
+                            <div class="d-inline-flex gap-1" role="group">
+                                <button type="button" class="btn btn-sm btn-outline-warning" title="Сбросить пароль"
                                         data-bs-toggle="collapse" data-bs-target="#reset{{ user.id }}">
                                     <i class="bi bi-key"></i>
                                 </button>
                                 <form method="POST" action="{{ url_for('main.toggle_student_account', id=user.id) }}"
                                       style="display: inline;">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-outline-secondary"
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary"
                                             title="{% if user.is_active %}Заблокировать{% else %}Разблокировать{% endif %}">
                                         <i class="bi bi-{% if user.is_active %}lock{% else %}unlock{% endif %}"></i>
                                     </button>
@@ -199,7 +199,7 @@
                                 <form method="POST" action="{{ url_for('main.delete_student_account', id=user.id) }}"
                                       style="display: inline;">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-outline-danger" title="Удалить запись"
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить запись"
                                             onclick="return confirm('Удалить учётную запись {{ user.username }}? Студент и его оценки останутся в базе, запись можно будет выдать заново.');">
                                         <i class="bi bi-trash"></i>
                                     </button>

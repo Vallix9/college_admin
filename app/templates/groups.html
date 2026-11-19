@@ -8,7 +8,7 @@
 {% endblock %}
 
 {% block page_title %}
-<i class="bi bi-collection"></i>Группы
+<i class="bi bi-collection"></i> Группы
 {% endblock %}
 
 {% block header_actions %}
@@ -56,13 +56,13 @@
                                     {{ group.created_at.strftime('%d.%m.%Y') if group.created_at else '—' }}
                                 </td>
                                 <td>
-                                    <div class="btn-group btn-group-sm" role="group">
-                                        <a href="{{ url_for('main.edit_group', id=group.id) }}" class="btn btn-outline-primary" title="Редактировать">
+                                    <div class="d-inline-flex gap-1" role="group">
+                                        <a href="{{ url_for('main.edit_group', id=group.id) }}" class="btn btn-sm btn-outline-primary" title="Редактировать">
                                             <i class="bi bi-pencil"></i>
                                         </a>
                                         <form method="POST" action="{{ url_for('main.delete_group', id=group.id) }}" style="display: inline;">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                            <button type="submit" class="btn btn-outline-danger" title="Удалить" onclick="return confirm('Удалить группу {{ group.name }}?')">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить" onclick="return confirm('Удалить группу {{ group.name }}?')">
                                                 <i class="bi bi-trash"></i>
                                             </button>
                                         </form>

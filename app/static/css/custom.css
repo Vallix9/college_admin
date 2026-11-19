@@ -178,16 +178,24 @@ body {
 
 /* Статистические карточки */
 .stat-card {
+    /* position: relative обязателен для Bootstrap stretched-link: без него
+       невидимая ссылка карточки растягивается на всю страницу, и курсор
+       над любым местом показывает её адрес */
+    position: relative;
     border-left: 4px solid var(--primary-color);
     padding: 20px;
     background: white;
     border-radius: 10px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.04);
-    transition: all 0.3s ease;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+/* Наведение меняет только тень и цвет полосы, но не сдвигает карточку.
+   Сдвиг (translateY) заставлял карточку «убегать» из-под курсора на нижнем
+   крае: hover срабатывал и сбрасывался по кругу, а вместе с ним дёргались
+   курсор и адрес в статусбаре */
 .stat-card:hover {
-    transform: translateY(-5px);
+    border-left-color: var(--secondary-color);
     box-shadow: 0 5px 20px rgba(0,0,0,0.1);
 }
 

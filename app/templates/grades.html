@@ -8,7 +8,7 @@
 {% endblock %}
 
 {% block page_title %}
-<i class="bi bi-journal-check"></i>Успеваемость
+<i class="bi bi-journal-check"></i> Успеваемость
 {% endblock %}
 
 {% block header_actions %}
@@ -132,13 +132,13 @@
                         </td>
                         <td>{{ grade.comments or '—' }}</td>
                         <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <a href="{{ url_for('main.view_student', student_id=grade.student_id) }}" class="btn btn-outline-info" title="К студенту">
+                            <div class="d-inline-flex gap-1" role="group">
+                                <a href="{{ url_for('main.view_student', student_id=grade.student_id) }}" class="btn btn-sm btn-outline-info" title="К студенту">
                                     <i class="bi bi-person"></i>
                                 </a>
                                 <form method="POST" action="{{ url_for('main.delete_grade', id=grade.id) }}" style="display: inline;">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit" class="btn btn-outline-danger" title="Удалить" onclick="return confirm('Удалить эту оценку?')">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Удалить" onclick="return confirm('Удалить эту оценку?')">
                                         <i class="bi bi-trash"></i>
                                     </button>
                                 </form>

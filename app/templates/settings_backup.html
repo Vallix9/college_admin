@@ -9,7 +9,7 @@
 {% endblock %}
 
 {% block page_title %}
-<i class="bi bi-hdd-stack me-2"></i>Управление резервными копиями
+<i class="bi bi-hdd-stack me-2"></i> Управление резервными копиями
 {% endblock %}
 
 {% block page_subtitle %}
@@ -70,7 +70,7 @@
                     </div>
                     
                     <button type="submit" class="btn btn-primary w-100">
-                        <i class="bi bi-hdd me-2"></i>Создать резервную копию
+                        <i class="bi bi-hdd me-2"></i> Создать резервную копию
                     </button>
                 </form>
             </div>
@@ -207,7 +207,7 @@
                                         <form method="POST" action="{{ url_for('main.restore_backup_file', filename=backup.filename) }}">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="btn btn-warning">
-                                                <i class="bi bi-arrow-clockwise me-2"></i>Восстановить
+                                                <i class="bi bi-arrow-clockwise me-2"></i> Восстановить
                                             </button>
                                         </form>
                                     </div>
@@ -232,7 +232,7 @@
                                         <form method="POST" action="{{ url_for('main.delete_backup_file', filename=backup.filename) }}">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="btn btn-danger">
-                                                <i class="bi bi-trash me-2"></i>Удалить
+                                                <i class="bi bi-trash me-2"></i> Удалить
                                             </button>
                                         </form>
                                     </div>

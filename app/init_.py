@@ -2,6 +2,7 @@ from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 import importlib
+import os
 
 from app.utils import setup_logging
 
@@ -118,6 +119,17 @@ def create_app(config_class='config.Config'):
     def csrf_processor():
         from app.forms import DeleteTokenForm
         return {'csrf_token': DeleteTokenForm().csrf_token}
+
+    # Версия статики для ссылок вида custom.css?v=... — иначе браузер
+    # держит старый файл из кеша и правки CSS не видно до жёсткого сброса
+    @app.context_processor
+    def static_version_processor():
+        css_path = os.path.join(app.static_folder, 'css', 'custom.css')
+        try:
+            version = str(int(os.path.getmtime(css_path)))
+        except OSError:
+            version = '0'
+        return {'static_version': version}
 
     return app
 

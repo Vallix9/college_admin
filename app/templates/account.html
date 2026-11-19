@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block page_title %}
-<i class="bi bi-person-badge me-2"></i>{{ student.full_name if student else current_user.display_name }}
+<i class="bi bi-person-badge me-2"></i> {{ student.full_name if student else current_user.display_name }}
 {% endblock %}
 
 {% block page_subtitle %}
@@ -69,7 +69,7 @@
     <div class="col-md-8">
         <div class="card h-100">
             <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-journal-check me-2"></i>Мои оценки</h5>
+                <h5 class="mb-0"><i class="bi bi-journal-check me-2"></i> Мои оценки</h5>
             </div>
             <div class="card-body">
                 {% if grades %}
@@ -116,7 +116,7 @@
 
 <div class="card">
     <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-key me-2"></i>Смена пароля</h5>
+        <h5 class="mb-0"><i class="bi bi-key me-2"></i> Смена пароля</h5>
     </div>
     <div class="card-body">
         <form method="POST" action="{{ url_for('main.change_password') }}" class="row g-3">
